@@ -42,6 +42,25 @@ requires discovery to adopt the git layer's rule: never follow links.
      package `__init__.py` over same-named `.py`, then path order.
    - The losing file gets a `module_shadowed` limitation.
 
+### Amendment after the fresh-context review (same milestone)
+
+8. A `src/` that is itself a package (it has `src/__init__.py`) is imported as `src.x`, so it is
+   **not** a source root. The repository root is used instead.
+9. **Containment on read.** `read_source` refuses any file whose resolved path differs from its
+   lexical path under the root. That catches a symlink or junction in *any* path component, not
+   just the last one.
+   - After opening, the descriptor's `(st_dev, st_ino)` must match the checked file. This
+     narrows the check-to-open race; `O_NOFOLLOW` still covers the final component.
+   - On Windows, `analyze_files` rejects paths that contain `\` or `:`.
+   - Residual risk: a component swapped between the check and the open on a filesystem whose
+     inode numbers are unreliable.
+10. **pytest-style imports.** pytest's default `prepend` mode puts the test file's base
+    directory on `sys.path`; that is the first ancestor without an `__init__.py`. For files
+    outside the configured source roots only, an absolute import that does not resolve is
+    retried relative to that directory.
+    - Example: `tests/test_a.py` doing `import helpers` finds `tests/helpers.py`.
+    - The result is `likely`, because it depends on how the tests are run.
+
 ## Alternatives considered
 
 - **`git ls-files` for enumeration:** honours `.gitignore`, but makes discovery depend on git

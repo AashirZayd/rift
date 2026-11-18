@@ -143,6 +143,44 @@
     before them. `AnalysisResult` already carries `content_sha256` and `analyzer_version`, so it
     is cacheable as is.
 
+### Amendment after the fresh-context review (same milestone)
+
+The review found these problems in the first implementation. Each is fixed and has a test in
+`tests/unit/analysis/test_review_regressions.py`.
+
+30. **Bounded, linear resolution.**
+    - `Resolver.member(module, name)` is memoized project-wide. An in-progress set detects
+      cycles, and the cap is 64 hops.
+    - Candidate lists are deduplicated. Without that, diamond-shaped re-export or star graphs
+      made the work exponential; a 60-level fan-out used to hang and now takes about 0.15 s.
+    - A cycle (including a module star-importing itself) or an over-deep chain is
+      `UNRESOLVABLE`. It is recorded as `unknown`, never as `missing_module`, and never raises.
+    - Results are memoized in a fixed order (sorted files, source order), so they are
+      deterministic.
+    - A `RecursionError` during one file's resolution becomes that file's
+      `source_too_complex` diagnostic.
+31. **Rebinding weakens confidence.** Plain stores are tracked per scope, and a `global` store
+    counts against the module scope. Plain stores are assignments, loop/with targets, `except
+    ... as`, match captures and `del`. A name with a definition or import binding that is also
+    rebound this way resolves `likely`, not `certain`.
+32. **Dynamic APIs through re-exports.** `qualified()` follows project re-exports to the
+    external name, so for example `compat.import_module` resolves to `importlib.import_module`.
+33. **Every candidate.** Attribute chains follow every candidate binding, for example a
+    `try`/`except` re-export of two implementations.
+34. **Static builtins.** The builtin names are a fixed table (`builtin_names.py`): the union of
+    CPython 3.11, 3.13 and 3.14 `dir(builtins)` with `site` enabled. `python -S` or runtime
+    mutation of builtins cannot change results.
+35. **Smaller items**:
+    - `__import__`'s literal `level` is honoured; a non-literal level is `dynamic_import`.
+    - `sys.modules` writes and mutating calls are module injection, recorded as
+      `dynamic_import`.
+    - Imports in `for`/`while`/`match` bodies are `conditional`.
+    - A name imported as `TYPE_CHECKING` (e.g. `as TC`) counts as `TYPE_CHECKING`.
+    - A symbol span starts at the decorator's `@`.
+    - A relative import in a file without a module name gets the code
+      `relative_import_without_package`.
+    - The t-string heuristic ignores `\t` escapes.
+
 ## Alternatives considered
 
 - **New `UnresolvedReason` values** (`monkeypatch`, `namespace_write`): clearer, but changes the
