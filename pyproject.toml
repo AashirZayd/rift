@@ -72,7 +72,9 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "S", "SIM", "RUF", "PTH", "PL", "N", "T20", "DTZ", "TRY"]
 # Every ignore must carry a reason.
-ignore = []
+ignore = [
+    "TRY003", # SPEC §5: RiftError subclasses carry a call-site message + hint + context by design
+]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = [
