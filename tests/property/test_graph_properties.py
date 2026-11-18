@@ -7,12 +7,14 @@
 - duplicates merge by the documented rule;
 - filters are monotonic: a stronger min_confidence, fewer kinds or a smaller max_depth never
   reach more;
-- every explanation path is a shortest path whose edges pass the filters, and it is the
-  lexicographically smallest one, checked against brute-force enumeration of all shortest paths.
+- every explanation path is a shortest path whose edges pass the filters, with the fewest weak
+  edges and then the smallest node IDs, checked against brute-force enumeration of all shortest
+  paths (also under max_depth).
 """
 
 import json
 from dataclasses import dataclass
+from itertools import pairwise
 
 from hypothesis import example, given
 from hypothesis import strategies as st
@@ -225,66 +227,95 @@ DIAMOND = Spec(
     ("m0", "m1", "m2", "m3"),
     (edge("m0", "m2"), edge("m0", "m1"), edge("m2", "m3"), edge("m1", "m3")),
 )
+WEAK_DIAMOND = Spec(  # the lexicographically smaller route has the weaker link
+    ("m0", "m1", "m2", "m3"),
+    (
+        edge("m0", "m1", confidence=Confidence.POSSIBLE),
+        edge("m1", "m3"),
+        edge("m0", "m2"),
+        edge("m2", "m3", confidence=Confidence.LIKELY),
+    ),
+)
+_COST_INDEX = {Confidence.UNKNOWN: 0, Confidence.POSSIBLE: 1, Confidence.LIKELY: 2}
+
+
+@dataclass(frozen=True)
+class Filters:
+    kinds: frozenset[EdgeKind] | None
+    floor: Confidence
+    max_depth: int | None
+
+    def admits(self, e: Edge) -> bool:
+        return _qualifies(e, self.kinds, self.floor)
 
 
 def _check_paths(
-    graph: DependencyGraph,
-    starts: frozenset[NodeId],
-    *,
-    reverse: bool,
-    kinds: frozenset[EdgeKind] | None,
-    floor: Confidence,
+    graph: DependencyGraph, starts: frozenset[NodeId], *, reverse: bool, filters: Filters
 ) -> None:
     method = graph.reverse_reachable if reverse else graph.forward_reachable
-    result = method(starts, kinds=kinds, min_confidence=floor)
+    result = method(
+        starts, kinds=filters.kinds, min_confidence=filters.floor, max_depth=filters.max_depth
+    )
     nodes = [n.id for n in graph.nodes()]
     hops: dict[NodeId, set[NodeId]] = {n: set() for n in nodes}
+    best: dict[tuple[NodeId, NodeId], Edge] = {}  # hop (in traversal order) -> explaining edge
     for e in graph.edges():
-        if _qualifies(e, kinds, floor):
-            if reverse:
-                hops[e.target].add(e.source)
-            else:
-                hops[e.source].add(e.target)
-    expected = _all_shortest_paths(nodes, starts, hops)
+        if not filters.admits(e):
+            continue
+        hop = (e.target, e.source) if reverse else (e.source, e.target)
+        hops[hop[0]].add(hop[1])
+        current = best.get(hop)
+        # The strongest qualifying edge explains a hop; a tie goes to the smaller kind.
+        if current is None or (-e.confidence.rank, e.kind.value) < (
+            -current.confidence.rank,
+            current.kind.value,
+        ):
+            best[hop] = e
 
+    def cost(path: tuple[NodeId, ...]) -> tuple[int, int, int]:
+        counts = [0, 0, 0]
+        for hop in pairwise(path):
+            index = _COST_INDEX.get(best[hop].confidence)
+            if index is not None:
+                counts[index] += 1
+        return (counts[0], counts[1], counts[2])
+
+    expected = {
+        node: candidates
+        for node, candidates in _all_shortest_paths(nodes, starts, hops).items()
+        if filters.max_depth is None or len(candidates[0]) - 1 <= filters.max_depth
+    }
     assert result.nodes == tuple(sorted(expected))
     for node, candidates in expected.items():
         path = result.path(node)
-        assert path == min(candidates)
+        # Fewest weak edges first, then the lexicographically smallest path.
+        assert path == min(candidates, key=lambda p: (cost(p), p))
         assert result.depth(node) == len(path) - 1
-        for i, step in enumerate(result.path_edges(node)):
-            here, there = path[i], path[i + 1]
-            source, target = (there, here) if reverse else (here, there)
-            assert (step.source, step.target) == (source, target)
-            parallel = [
-                e
-                for e in graph.edges()
-                if (e.source, e.target) == (source, target) and _qualifies(e, kinds, floor)
-            ]
-            # The strongest qualifying edge explains the hop; a tie goes to the smaller kind.
-            best = min(parallel, key=lambda e: (-e.confidence.rank, e.kind.value))
-            assert step == best
+        assert result.path_edges(node) == tuple(best[hop] for hop in pairwise(path))
 
 
 @given(
     specs(),
     kind_filters,
     confidences,
+    st.none() | st.integers(min_value=0, max_value=MAX_NODES),
     st.sets(st.integers(min_value=0, max_value=MAX_NODES - 1), min_size=2),
 )
-@example(DIAMOND, None, Confidence.UNKNOWN, {0, 3})  # m3 via m1 and m0 via m1, never via m2
-def test_paths_are_the_smallest_shortest_paths(
+@example(DIAMOND, None, Confidence.UNKNOWN, None, {0, 3})  # m3 via m1, m0 via m1 (smaller IDs)
+@example(WEAK_DIAMOND, None, Confidence.UNKNOWN, None, {0, 3})  # m3 via m2 (fewer weak links)
+def test_paths_are_the_strongest_then_smallest_shortest_paths(
     spec: Spec,
     kinds: frozenset[EdgeKind] | None,
     floor: Confidence,
+    max_depth: int | None,
     start_indexes: set[int],
 ) -> None:
     """Every node as a single start plus one multi-start set, in both directions, with the drawn
     filters and unfiltered."""
     graph = spec.build()
     several = frozenset(nid(spec.names[i % len(spec.names)]) for i in start_indexes)
-    filters = {(kinds, floor), (None, Confidence.UNKNOWN)}  # drawn filters, and none at all
+    drawn = Filters(kinds, floor, max_depth)
     for starts in [*(frozenset({nid(name)}) for name in spec.names), several]:
         for reverse in (False, True):
-            for k, f in filters:
-                _check_paths(graph, starts, reverse=reverse, kinds=k, floor=f)
+            for filters in {drawn, Filters(None, Confidence.UNKNOWN, None)}:
+                _check_paths(graph, starts, reverse=reverse, filters=filters)

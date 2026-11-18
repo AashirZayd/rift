@@ -17,7 +17,7 @@ from rift.core.models.graph import Confidence, Edge, EdgeKind, Node
 from rift.core.serialization import from_dict, to_dict
 from rift.graph.errors import GraphError
 from rift.graph.merge import merge_edges
-from rift.graph.traversal import Reachability, breadth_first
+from rift.graph.traversal import Reachability, breadth_first, check_confidence, check_kinds
 
 GRAPH_FORMAT: Final = "rift.graph"
 GRAPH_FORMAT_VERSION: Final = 1
@@ -111,8 +111,10 @@ class DependencyGraph:
         )
 
     def edge(self, source: NodeId, kind: EdgeKind, target: NodeId) -> Edge | None:
-        """The edge ``source -kind-> target``, if present."""
-        return self._out.get(source, {}).get(kind, {}).get(target)
+        """The edge ``source -kind-> target``, or ``None``; unknown endpoints raise."""
+        self.node(source)
+        self.node(target)
+        return self._out[source].get(kind, {}).get(target)
 
     def successors(
         self,
@@ -144,13 +146,14 @@ class DependencyGraph:
         min_confidence: Confidence,
     ) -> list[Edge]:
         self.node(node_id)  # raises for an unknown node
-        wanted = None if kinds is None else frozenset(kinds)
+        wanted = frozenset(check_kinds(kinds))
+        floor = check_confidence(min_confidence)
         return [
             edge
             for kind, by_neighbour in adjacency[node_id].items()
-            if wanted is None or kind in wanted
+            if kind in wanted
             for edge in by_neighbour.values()
-            if edge.confidence >= min_confidence
+            if edge.confidence >= floor
         ]
 
     # ------------------------------------------------------------------ traversal
@@ -206,8 +209,10 @@ class DependencyGraph:
 
     @classmethod
     def from_dict(cls, data: object) -> "DependencyGraph":
-        """Strict inverse of :meth:`to_dict`. Unknown or missing keys, duplicate nodes, duplicate
-        ``(source, kind, target)`` edges and dangling edges raise :class:`SerializationError`."""
+        """Strict decoding of :meth:`to_dict` output: unknown or missing keys, another format or
+        version, duplicate nodes, duplicate ``(source, kind, target)`` edges and dangling edges
+        raise :class:`SerializationError`. The order of ``nodes`` and ``edges`` is not
+        significant; ``to_dict`` of the result is always canonical."""
         if not isinstance(data, dict):
             raise SerializationError("graph document must be an object")
         if set(data) != _DOCUMENT_KEYS:

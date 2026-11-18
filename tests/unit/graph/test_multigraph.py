@@ -1,6 +1,7 @@
 """SPEC §10: graph construction, queries, traversal filters, explanation paths, serialization."""
 
 import json
+from collections.abc import Callable
 
 import pytest
 
@@ -270,3 +271,68 @@ def _document(**overrides: object) -> dict[str, object]:
 def test_from_dict_is_strict(document: object) -> None:
     with pytest.raises(SerializationError):
         DependencyGraph.from_dict(document)
+
+
+def test_explanation_prefers_the_path_with_fewer_weak_edges() -> None:
+    """Review finding #5: a certain route beats a lexicographically smaller weak one."""
+    graph = graph_of(
+        ["a", "b", "c", "d"],
+        [
+            edge("a", "b", confidence=Confidence.POSSIBLE),
+            edge("b", "d"),
+            edge("a", "c"),
+            edge("c", "d", confidence=Confidence.LIKELY),
+        ],
+    )
+    assert graph.forward_reachable(nid("a")).path(nid("d")) == ids("a", "c", "d")
+    assert graph.reverse_reachable(nid("d")).path(nid("a")) == ids("d", "c", "a")
+    # Without the weak link the smaller IDs decide again.
+    strong = graph_of(
+        ["a", "b", "c", "d"], [edge("a", "b"), edge("b", "d"), edge("a", "c"), edge("c", "d")]
+    )
+    assert strong.forward_reachable(nid("a")).path(nid("d")) == ids("a", "b", "d")
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        pytest.param({"kinds": CALLS}, id="bare-enum-kinds"),
+        pytest.param({"kinds": "calls"}, id="string-kinds"),
+        pytest.param({"kinds": ["calls"]}, id="non-enum-kind"),
+        pytest.param({"kinds": 3}, id="non-iterable-kinds"),
+        pytest.param({"min_confidence": "likely"}, id="string-confidence"),
+        pytest.param({"max_depth": 0.5}, id="float-depth"),
+        pytest.param({"max_depth": "1"}, id="string-depth"),
+    ],
+)
+def test_traversal_and_queries_reject_malformed_filters(
+    layered: DependencyGraph, arguments: dict[str, object]
+) -> None:
+    query_arguments = {k: v for k, v in arguments.items() if k != "max_depth"}
+    calls: list[Callable[[], object]] = [
+        lambda: layered.forward_reachable(nid("a"), **arguments),  # type: ignore[arg-type]  # deliberately malformed
+        lambda: layered.reverse_reachable(nid("a"), **arguments),  # type: ignore[arg-type]  # deliberately malformed
+    ]
+    if query_arguments:
+        calls += [
+            lambda: layered.successors(nid("a"), **query_arguments),  # type: ignore[arg-type]  # deliberately malformed
+            lambda: layered.predecessors(nid("a"), **query_arguments),  # type: ignore[arg-type]  # deliberately malformed
+        ]
+    for call in calls:
+        with pytest.raises(GraphError) as exc_info:
+            call()
+        assert exc_info.value.code is ErrorCode.INVALID_ARGUMENT
+
+
+@pytest.mark.parametrize("starts", [[1], 7], ids=["non-string-start", "non-iterable"])
+def test_malformed_starts_are_rejected(layered: DependencyGraph, starts: object) -> None:
+    with pytest.raises(GraphError) as exc_info:
+        layered.forward_reachable(starts)  # type: ignore[arg-type]  # deliberately malformed
+    assert exc_info.value.code is ErrorCode.INVALID_ARGUMENT
+
+
+def test_edge_lookup_raises_for_unknown_endpoints(layered: DependencyGraph) -> None:
+    assert layered.edge(nid("a"), CALLS, nid("b")) is None
+    for source, target in (("zz", "a"), ("a", "zz")):
+        with pytest.raises(GraphError):
+            layered.edge(nid(source), IMPORTS, nid(target))
