@@ -80,6 +80,7 @@ ignore = [
 "tests/**" = [
     "S101",    # assert is the pytest idiom
     "S603",    # tests spawn real subprocesses with argv lists built from sys.executable / fixed tokens
+    "S607",    # fixture builders run the real `git` from PATH, independently of rift.git
     "PLR2004", # literal expected values are clearer than named constants in assertions
 ]
 

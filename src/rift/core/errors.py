@@ -12,6 +12,7 @@ class ErrorCode(StrEnum):
     INVALID_PATH = "invalid_path"
     INVALID_ID = "invalid_id"
     INVALID_TIMESTAMP = "invalid_timestamp"
+    INVALID_ARGUMENT = "invalid_argument"
     GIT_FAILED = "git_failed"
     GIT_TIMEOUT = "git_timeout"
     GIT_UNAVAILABLE = "git_unavailable"
