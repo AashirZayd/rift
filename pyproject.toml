@@ -100,15 +100,16 @@ disallow_incomplete_defs = false
 
 # ---------------------------------------------------------------- pytest
 [tool.pytest.ini_options]
-minversion = "8.0"
+minversion = "9.0"
 testpaths = ["tests"]
 addopts = [
     "-ra",
     "--strict-markers",
     "--strict-config",
     "--import-mode=importlib",
-    "--cov=rift",
-    "--cov-branch",
+    # Bare --cov: the measured source comes from [tool.coverage.run] only. Repeating it here
+    # (--cov=rift) makes coverage warn "module-not-measured".
+    "--cov",
     "--cov-report=term-missing",
 ]
 xfail_strict = true
@@ -131,6 +132,42 @@ show_missing = true
 # ---------------------------------------------------------------- import-linter (SPEC §4.1)
 [tool.importlinter]
 root_package = "rift"
+# Needed so the renderer contract below can forbid imports of rich/typer.
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "no circular imports between sibling modules anywhere under rift"
+type = "acyclic_siblings"
+ancestors = ["rift"]
+
+[[tool.importlinter.contracts]]
+name = "plugins internals: api is the bottom layer (api never imports registry/trust)"
+type = "layers"
+containers = ["rift.plugins"]
+layers = ["(registry) | (trust)", "api"]
+exhaustive = true
+
+[[tool.importlinter.contracts]]
+name = "only cli renders: no rich/typer outside rift.cli"
+type = "forbidden"
+source_modules = [
+    "rift.services",
+    "rift.proof",
+    "rift.policy",
+    "rift.verification",
+    "rift.impact",
+    "rift.invariants",
+    "rift.analysis",
+    "rift.graph",
+    "rift.evidence",
+    "rift.cache",
+    "rift.git",
+    "rift.discovery",
+    "rift.config",
+    "rift.plugins",
+    "rift.core",
+]
+forbidden_modules = ["rich", "typer"]
 
 [[tool.importlinter.contracts]]
 name = "SPEC 4.1 layers (lower never imports higher; '|' siblings are independent)"

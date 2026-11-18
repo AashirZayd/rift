@@ -30,6 +30,25 @@ depends only on core) are architectural. They only hold if the import structure 
        only by a superseding ADR.
      - `rift.cli` imports only `rift.services` and `rift.core`, **checked on direct imports only**
        (`allow_indirect_imports = true`), because cli → services → lower layers is the intended path.
+     - **Only `rift.cli` renders**: no other subpackage may import `rich` or `typer`. This encodes
+       "policy must not import … any renderer" (§4.1) and "output goes through `rift.cli`
+       renderers" (§5). It requires `include_external_packages = true`.
+   - An `acyclic_siblings` contract over all of `rift`, for "no circular imports" (§4.1). It
+     covers cycles inside a package as well (e.g. between two `rift.core` modules), which the
+     top-level layers contract cannot see.
+   - A `layers` contract inside `rift.plugins` (`(registry) | (trust)` above `api`, exhaustive).
+     The forbidden contract cannot name `rift.plugins` itself, because it is the ancestor of
+     `rift.plugins.api`. Without this layers contract, `api` could import the registry and trust
+     code (§2.5).
+   - **Induced rule (from the transitive proof ban):** `rift.policy`, and any module `rift.proof`
+     imports, must not reach `analysis`, `graph`, `impact`, `verification` or `git`. The proof
+     validator re-evaluates the verdict through policy (§16), so policy has to work on core
+     models and evidence only. If M6 needs otherwise, a superseding ADR must relax this
+     deliberately.
+   - **Known gap:** import-linter cannot forbid the ancestor package `rift` itself, so
+     `rift.core` → `rift` (e.g. `from rift import __version__`) is pinned by an AST test
+     instead (`tests/unit/test_packages.py::test_core_never_imports_the_root_package`).
+     `rift.services.version` legitimately imports the root package for `__version__`.
 3. **Entry point is `rift.cli.app:app`**, not `rift.cli:app`. Rule 1 forbids defining the Typer
    app in `rift/cli/__init__.py`.
 4. **Even `rift version` goes through a service** (`rift.services.version.version_info`), so the
@@ -47,5 +66,12 @@ depends only on core) are architectural. They only hold if the import structure 
   imports in a temporary copy (core→cli, graph→analysis, graph→git, impact→invariants, cli→graph,
   proof→analysis, proof→policy→verification, plugins.api→cache, an unplaced subpackage) and asserts
   that the expected contract reports BROKEN. This proves the contracts actually catch violations.
+  Further planted cases cover an intra-package cycle, api→registry, an unplaced plugins module,
+  policy→rich and services→typer.
 - `tests/unit/test_packages.py` pins the subpackage set and the docstring-only rule.
-- Adding a top-level subpackage requires updating both the layers contract and that test.
+- The hand-maintained forbidden lists (cli, core, plugins.api, renderer sources) are compared
+  against the real subpackage set by `tests/contract/test_layering.py`. A new top-level package
+  cannot silently become importable from those sources.
+- **Adding a top-level subpackage requires updating:** the §4.1 layers contract, the `core`,
+  `plugins.api` and `cli` forbidden lists, the renderer contract's sources, and `SUBPACKAGES` in
+  `tests/unit/test_packages.py`. The drift tests fail until all of these are done.

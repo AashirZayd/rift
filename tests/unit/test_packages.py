@@ -73,3 +73,35 @@ def test_plugin_api_module_exists_without_logic() -> None:
     assert api.__file__ is not None
     tree = ast.parse(Path(api.__file__).read_text(encoding="utf-8"))
     assert len(tree.body) == 1
+
+
+def _imported_modules(path: Path, package: str) -> list[str]:
+    """Absolute names of every module a source file imports (relative imports resolved)."""
+    names: list[str] = []
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Import):
+            names.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                base = package.split(".")[: len(package.split(".")) - (node.level - 1)]
+                names.append(".".join([*base, node.module] if node.module else base))
+            else:
+                names.append(node.module or "")
+    return names
+
+
+def test_core_never_imports_the_root_package() -> None:
+    # import-linter cannot forbid the ancestor package `rift` itself (ADR-0002), so pin it here:
+    # core may import only rift.core.* from rift.
+    core_dir = Path(rift.__path__[0]) / "core"
+    offenders = []
+    for path in sorted(core_dir.rglob("*.py")):
+        rel = path.relative_to(core_dir.parent.parent).with_suffix("")
+        parts = rel.parts if rel.name != "__init__" else rel.parts[:-1]
+        package = ".".join(parts if path.name == "__init__.py" else parts[:-1])
+        for name in _imported_modules(path, package):
+            if (name == "rift" or name.startswith("rift.")) and not (
+                name == "rift.core" or name.startswith("rift.core.")
+            ):
+                offenders.append(f"{path.name}: {name}")
+    assert offenders == []
