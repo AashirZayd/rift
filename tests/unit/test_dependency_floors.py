@@ -6,6 +6,7 @@ suite, so these tests exercise the floors, not just today's lockfile versions.
 
 import os
 import re
+import subprocess
 import tomllib
 from importlib.metadata import version
 from pathlib import Path
@@ -61,7 +62,17 @@ def test_jsonschema_draft_2020_12_features_rift_relies_on() -> None:
     reason="only meaningful in the lowest-direct CI job, which sets RIFT_EXPECT_LOWEST_DIRECT=1",
 )
 def test_lowest_direct_job_really_installed_the_floors() -> None:
-    lock = (REPO_ROOT / "uv.lock").read_text(encoding="utf-8")
+    # `uv sync --resolution lowest-direct` rewrites uv.lock in the workspace, so compare against
+    # the committed lockfile instead.
+    lock = subprocess.run(
+        ["git", "show", "HEAD:uv.lock"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=60,
+        check=True,
+    ).stdout
     for name, floor in _floors().items():
         installed = version(name)
         assert _release(installed) == _release(floor), f"{name}: {installed} != floor {floor}"
