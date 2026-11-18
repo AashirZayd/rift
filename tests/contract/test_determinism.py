@@ -1,7 +1,8 @@
 """Determinism contract (SPEC §7.6): identical bytes across processes with different hash seeds.
 
 M1 scope: canonical JSON and content IDs of core models, and real-git ChangeSets. M2 adds Python
-AnalysisResults. M6 extends this file to whole Change Proofs.
+AnalysisResults; M3 the dependency graph and its traversal output. M6 extends this file to whole
+Change Proofs.
 """
 
 import json
@@ -15,11 +16,13 @@ import pytest
 from rift.analysis.python.analyzer import analyze_project
 from rift.core.models.analysis import AnalysisResult
 from rift.core.serialization import from_dict, to_dict
+from rift.graph.multigraph import DependencyGraph
 from tests.fixtures.git_repo import GitRepo, hermetic_git_env, lines
 from tests.fixtures.python_project import write_project
 
 PROBE = Path(__file__).with_name("determinism_probe.py")
 ANALYSIS_PROBE = Path(__file__).with_name("analysis_probe.py")
+GRAPH_PROBE = Path(__file__).with_name("graph_probe.py")
 SEEDS = ("0", "4242")
 
 
@@ -150,3 +153,21 @@ def test_analysis_results_round_trip_and_are_stable_in_process(tmp_path: Path) -
     assert kinds == {"imports", "calls", "inherits", "references"}
     reasons = {u.reason.value for r in first.results for u in r.unresolved}
     assert {"syntax_error", "exec_eval", "dynamic_attribute", "sys_path_mutation"} <= reasons
+
+
+@pytest.mark.integration
+def test_graph_and_traversal_are_byte_identical_across_hash_seeds(tmp_path: Path) -> None:
+    root = write_project(tmp_path / "project", ANALYSIS_PROJECT)
+    copy = write_project(tmp_path / "elsewhere" / "copy", ANALYSIS_PROJECT)
+    first = _run([str(GRAPH_PROBE), str(root)], SEEDS[0])
+    second = _run([str(GRAPH_PROBE), str(copy)], SEEDS[1])
+    assert first["set_order"] != second["set_order"]  # positive control
+    assert first["output"] == second["output"]
+    graph = DependencyGraph.from_dict(json.loads(first["output"][0]))
+    # Non-trivial corpus: many nodes, every analyzer edge kind, and real explanation paths.
+    assert graph.node_count > 50
+    assert {e.kind.value for e in graph.edges()} == {"imports", "calls", "inherits", "references"}
+    assert len(first["output"]) == 2 + 2 * graph.node_count
+    assert DependencyGraph.from_dict(json.loads(first["output"][0])).to_dict() == json.loads(
+        first["output"][0]
+    )
