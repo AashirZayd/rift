@@ -18,6 +18,17 @@ separately (see `docs/SPEC.md` §16).
 - Coverage threshold `fail_under = 85` is enforced.
 
 ### Added
+- Dependency graph (M3, ADR-0009): `rift.graph.DependencyGraph`, a custom in-memory directed
+  multigraph with bidirectional adjacency.
+  - Duplicate edges merge to the strongest confidence. Provenance flags are unioned and
+    restricting flags (`type_checking_only`, `conditional`) intersected.
+  - Iterative BFS `forward_reachable` / `reverse_reachable` with kind, `min_confidence` and
+    `max_depth` filters, sorted results and lexicographically smallest shortest explanation paths.
+  - Deterministic, strict `to_dict` / `from_dict`.
+  - `build_graph(results)` turns M2 `AnalysisResult`s into the graph: test functions and methods
+    become `test:` nodes, constants fold into their module, and an edge to a missing node becomes
+    an `UnresolvedReference`.
+- `benchmarks/graph_build.py`: builds the graph for a repository (default: RIFT itself).
 - Python analyzer (M2, ADR-0007): pure static analysis with stdlib `ast`. Analyzed code is
   never imported, executed or compiled.
   - One `AnalysisResult` per file: symbols; `imports`/`calls`/`inherits`/`references` edges
