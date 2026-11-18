@@ -1,14 +1,14 @@
 # Project Status
-_Last updated: 2026-11-18 — by: Claude Code session (M1 build)_
+_Last updated: 2026-11-18 — by: Claude Code session (M2 start)_
 
 ## Current milestone
-M1 — Core models & Git — awaiting review (M0 accepted by user 2026-11-18; CI green, PR #1 merged)
+M2 — Python analyzer — in progress on `m2/python-analyzer` (M1 accepted by user 2026-11-18; CI green incl. git-minimum 2.30.2 and lowest-direct; PR #2 merged)
 
 ## Completed (verified)
 ### M0 (accepted)
 - Packaging, CLI surface (`rift --help`, `rift version [--json]`), single-sourced version, wheel smoke test, docstring-only subpackages, 8 layering contracts with planted-violation tests, schema-mirror drift test — verified by the M0 tests, all still passing in the M1 gate.
 
-### M1
+### M1 (accepted 2026-11-18)
 - All §6 models (33 serializable dataclasses in `rift.core.models.*`) with construction-time type and invariant checks — verified by `tests/unit/core/test_models_serialization_identity.py`
 - Serialization round-trip for every model (`to_dict`/`from_dict` and canonical JSON fixed point); every dataclass has a codec and a strategy — verified by `tests/property/test_model_roundtrip.py` (also run with `HYPOTHESIS_PROFILE=ci`, 500 examples: 68 passed)
 - Strict decoding; hostile input (deep nesting, malformed URLs, oversized ints) surfaces only as `SerializationError` — verified by `tests/unit/core/test_models_serialization_identity.py`, `tests/unit/core/test_review_hardening.py`
@@ -25,15 +25,18 @@ M1 — Core models & Git — awaiting review (M0 accepted by user 2026-11-18; CI
 - §23 gate after review fixes: sync OK, format 103 files clean, ruff 0, mypy 0 issues in 83 files, lint-imports 8 kept / 0 broken, pytest 398 passed / 3 skipped / 1 xfailed, coverage 96.02% (fail_under 85), build OK, wheel smoke OK
 
 ## Pending
-- User review of M1.
+- M2 build (§9, §24 "M2 — Python analyzer").
 
 ## Release blockers (v0.1.0)
 - Revisit typer cap before v0.1.0 — accept transitive pydantic or keep cap + document isolated install (uv tool / pipx).
 
 ## M6 checklist
-- Require sorted order (or document the key) for `ImpactResult.unresolved`, `ChangeProof.limitations`, `Evidence.limitations`, `ProofVerification.runs`, `VerificationPlan.reasons` (§7.2; M1 review nit).
+(Recorded only; not implemented before M6.)
+- Enforce sorted collections in the models (deferred M1 review item): require sorted order (or document the key) for `ImpactResult.unresolved`, `ChangeProof.limitations`, `Evidence.limitations`, `ProofVerification.runs`, `VerificationPlan.reasons` (§7.2).
+- Submodule edits are not detected (ADR-0006): this must appear in the proof's `limitations` whenever submodules are present, never silently.
+- `core.excludesFile` makes untracked-file detection machine-dependent (a §7 risk). Decide with an ADR: ignore global excludes, or record a hash of them in the environment block.
+- jsonschema floor 4.0.1: if M6 needs cross-file `$ref` via the `referencing` API (4.18+), raise the floor in an ADR (amend ADR-0003) rather than keeping two code paths.
 - Accept and preserve `x-` extension keys in decoding (§16).
-- If cross-file `$ref` needs jsonschema's `referencing`, raise the floor to 4.18 (ADR-0003).
 
 ## M9 checklist
 - Fill CoC contact (`CODE_OF_CONDUCT.md` reporting placeholder).
@@ -56,7 +59,7 @@ M1 — Core models & Git — awaiting review (M0 accepted by user 2026-11-18; CI
 - None. Nothing from M2+ implemented.
 
 ## Unverified
-- CI on GitHub for the M1 branch, in particular the new `git-minimum` job (git 2.30.2) and the reworked `lowest-direct` job. The Docker engine was not running locally, so git 2.30 has not been exercised on this machine.
+- None for M1: user reports CI green on GitHub for PR #2, including `git-minimum` (git 2.30.2, which runs `tests/security/test_git_hardening.py::test_partial_clone_never_fetches_or_runs_transport_commands`) and `lowest-direct`.
 
 ## Architectural decisions (ADR index)
 - [ADR-0001](docs/adr/0001-record-architecture-decisions.md) — Record architecture decisions
@@ -67,5 +70,4 @@ M1 — Core models & Git — awaiting review (M0 accepted by user 2026-11-18; CI
 - [ADR-0006](docs/adr/0006-git-layer-hardening-and-minimum-version.md) — Git hardening beyond §8 (no network, submodules, filters), determinism, minimum git 2.30
 
 ## Next tasks
-- Await "M1 accepted".
-- M2 — Python analyzer (§9), incl. the cache-placement decision (§30). Not started.
+- M2 — Python analyzer (§9): design note, then build. Cache placement decided in the design note.
