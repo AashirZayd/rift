@@ -119,7 +119,7 @@ ANALYSIS_PROJECT: dict[str, str | bytes] = {
     "src/ns/plugin/impl.py": "from app import *\ndef run(obj):\n    obj.save()\n    f1()\n",
     "tests/test_models.py": "from app import Model\ndef test_save():\n    Model().save()\n",
     "broken.py": "def f(:\n",
-    "big.py": b"x = 1\n" * 10,
+    "big.py": b"x = 1\n" * 200_000,  # > 1 MiB default max_file_bytes: oversized path
     "with space/ünï.py": "import app\n",
 }
 
@@ -127,7 +127,10 @@ ANALYSIS_PROJECT: dict[str, str | bytes] = {
 @pytest.mark.integration
 def test_analysis_results_are_byte_identical_across_hash_seeds(tmp_path: Path) -> None:
     root = write_project(tmp_path / "project", ANALYSIS_PROJECT)
-    first, second = (_run([str(ANALYSIS_PROBE), str(root)], seed) for seed in SEEDS)
+    # Second seed on a copy at a different absolute path: catches absolute-path leaks too.
+    copy = write_project(tmp_path / "elsewhere" / "copy", ANALYSIS_PROJECT)
+    first = _run([str(ANALYSIS_PROBE), str(root)], SEEDS[0])
+    second = _run([str(ANALYSIS_PROBE), str(copy)], SEEDS[1])
     assert first["set_order"] != second["set_order"]  # positive control
     assert first["output"] == second["output"]
     assert len(first["output"]) == len(ANALYSIS_PROJECT) + 2

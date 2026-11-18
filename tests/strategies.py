@@ -87,6 +87,7 @@ from rift.core.models.verification import (
     VerificationPlan,
     VerificationRun,
 )
+from rift.core.paths import is_repo_path
 
 HEX = "0123456789abcdef"
 SMALL = 4  # keep generated collections small so composite models stay fast
@@ -106,7 +107,9 @@ segment = st.text(
     min_size=1,
     max_size=6,
 ).filter(lambda s: s not in {".", ".."})
-repo_path = st.lists(segment, min_size=1, max_size=3).map("/".join)
+# A top-level segment such as ``A:`` reads as a Windows drive and is rejected by design
+# (ADR-0005), so only generate paths the policy accepts.
+repo_path = st.lists(segment, min_size=1, max_size=3).map("/".join).filter(is_repo_path)
 module_name = st.lists(identifier, min_size=1, max_size=3).map(".".join)
 qualname = st.lists(
     st.one_of(identifier, st.sampled_from(["<locals>", "<lambda>"])), min_size=1, max_size=3
