@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from enum import StrEnum
 
-from rift.core.models._checks import non_empty, require
+from rift.core.models._checks import check_types, non_empty, require
 
 
 class PluginKind(StrEnum):
@@ -26,6 +26,7 @@ class PluginMetadata:
     requirements: tuple[str, ...]
 
     def __post_init__(self) -> None:
+        check_types(self)
         non_empty(self.name, "name")
         non_empty(self.version, "version")
         require(

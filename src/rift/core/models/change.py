@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from enum import StrEnum
 
-from rift.core.models._checks import require
+from rift.core.models._checks import check_types, require
 from rift.core.models.repo import RepositoryRevision
 from rift.core.paths import validate_repo_path
 
@@ -28,6 +28,7 @@ class LineRange:
     end: int
 
     def __post_init__(self) -> None:
+        check_types(self)
         require(
             isinstance(self.start, int) and not isinstance(self.start, bool) and self.start >= 1,
             "start must be >= 1",
@@ -59,6 +60,7 @@ class ChangedFile:
     is_binary: bool
 
     def __post_init__(self) -> None:
+        check_types(self)
         validate_repo_path(self.path, "path")
         if self.status in _NEEDS_OLD_PATH:
             require(self.old_path is not None, f"{self.status} requires old_path")
@@ -82,6 +84,7 @@ class ChangeSet:
     includes_uncommitted: bool
 
     def __post_init__(self) -> None:
+        check_types(self)
         require(self.base.commit is not None, "base must be a commit")
         require(
             self.includes_uncommitted == (self.head.commit is None),

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from rift.core.ids import NodeId, validate_node_id
-from rift.core.models._checks import require, sorted_unique
+from rift.core.models._checks import check_types, require, sorted_unique
 from rift.core.models.graph import UnresolvedReference
 
 
@@ -32,6 +32,7 @@ class ImpactExplanation:
     path: tuple[NodeId, ...]
 
     def __post_init__(self) -> None:
+        check_types(self)
         validate_node_id(self.node)
         require(len(self.path) >= 1, "path must not be empty")
         for step in self.path:
@@ -51,6 +52,7 @@ class ImpactResult:
     explanations: tuple[ImpactExplanation, ...]
 
     def __post_init__(self) -> None:
+        check_types(self)
         for field_name in ("changed_nodes", "affected_nodes", "public_interfaces", "related_tests"):
             values: tuple[NodeId, ...] = getattr(self, field_name)
             for node_id in values:

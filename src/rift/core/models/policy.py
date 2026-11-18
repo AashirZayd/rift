@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from rift.core.ids import EvidenceId, validate_evidence_id
-from rift.core.models._checks import non_empty, require, sorted_unique
+from rift.core.models._checks import check_types, non_empty, require, sorted_unique
 
 INVARIANT_ID = re.compile(r"^[a-z0-9][a-z0-9-]{1,63}$")
 
@@ -37,6 +37,7 @@ class Scope:
     symbols: tuple[str, ...]
 
     def __post_init__(self) -> None:
+        check_types(self)
         for pattern in (*self.paths, *self.symbols):
             non_empty(pattern, "pattern")
 
@@ -51,6 +52,7 @@ class Requirement:
     select: Scope | None
 
     def __post_init__(self) -> None:
+        check_types(self)
         non_empty(self.id, "id")
         non_empty(self.kind, "kind")
 
@@ -64,6 +66,7 @@ class Invariant:
     requires: tuple[Requirement, ...]
 
     def __post_init__(self) -> None:
+        check_types(self)
         require(
             isinstance(self.id, str) and INVARIANT_ID.fullmatch(self.id) is not None,
             f"invariant id must match {INVARIANT_ID.pattern}, got {self.id!r}",
@@ -79,6 +82,7 @@ class Policy:
     require_complete_analysis: bool
 
     def __post_init__(self) -> None:
+        check_types(self)
         non_empty(self.name, "name")
         sorted_unique([requirement.id for requirement in self.requirements], "requirements")
 
@@ -93,6 +97,7 @@ class RequirementResult:
     message: str | None
 
     def __post_init__(self) -> None:
+        check_types(self)
         non_empty(self.requirement_id, "requirement_id")
         non_empty(self.kind, "kind")
         for evidence_id in self.evidence_ids:
@@ -107,6 +112,7 @@ class PolicyResult:
     summary: str
 
     def __post_init__(self) -> None:
+        check_types(self)
         sorted_unique(
             [result.requirement_id for result in self.requirement_results], "requirement_results"
         )

@@ -12,7 +12,7 @@ from rift.core.ids import (
     validate_content_id,
     validate_evidence_id,
 )
-from rift.core.models._checks import non_empty, require, sorted_unique
+from rift.core.models._checks import check_types, non_empty, require, sorted_unique
 from rift.core.models.graph import Confidence
 from rift.core.models.source import SourceLocation
 
@@ -79,6 +79,7 @@ class Evidence:
     data: FrozenMap = field(default_factory=FrozenMap)
 
     def __post_init__(self) -> None:
+        check_types(self)
         validate_evidence_id(self.id)
         non_empty(self.producer, "producer")
         non_empty(self.producer_version, "producer_version")
@@ -100,6 +101,7 @@ class Claim:
     status: ClaimStatus
 
     def __post_init__(self) -> None:
+        check_types(self)
         validate_content_id(self.id, IdPrefix.CLAIM)
         non_empty(self.subject, "subject")
         require(len(self.evidence_ids) >= 1, "every claim references at least one evidence ID")
@@ -117,6 +119,7 @@ class Limitation:
     subject: str | None
 
     def __post_init__(self) -> None:
+        check_types(self)
         non_empty(self.kind, "kind")
         non_empty(self.message, "message")
         if self.subject is not None:

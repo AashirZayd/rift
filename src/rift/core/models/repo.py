@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from rift.core.models._checks import is_hex, non_empty, require
+from rift.core.models._checks import check_types, is_hex, non_empty, require
 
 # Object names: SHA-1 (40 hex) or SHA-256 (64 hex) repositories.
 COMMIT_HEX_LENGTHS = (40, 64)
@@ -28,6 +28,7 @@ class Repository:
     default_branch: str | None
 
     def __post_init__(self) -> None:
+        check_types(self)
         require(isinstance(self.root, Path) and self.root.is_absolute(), "root must be absolute")
         if self.default_branch is not None:
             non_empty(self.default_branch, "default_branch")
@@ -43,6 +44,7 @@ class RepositoryRevision:
     is_dirty: bool
 
     def __post_init__(self) -> None:
+        check_types(self)
         if self.commit is not None:
             require(
                 is_hex(self.commit, COMMIT_HEX_LENGTHS),

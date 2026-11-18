@@ -6,7 +6,7 @@ from enum import StrEnum
 
 from rift.core.clock import check_timestamp
 from rift.core.ids import IdPrefix, NodeId, validate_content_id, validate_node_id
-from rift.core.models._checks import non_empty, non_negative, require
+from rift.core.models._checks import check_types, non_empty, non_negative, require
 
 
 class PlanMode(StrEnum):
@@ -37,6 +37,7 @@ class PlannedCheck:
     reasons: tuple[str, ...]
 
     def __post_init__(self) -> None:
+        check_types(self)
         _test_id(self.node_id, "node_id")
         require(len(self.reasons) >= 1, "a planned check needs at least one reason")
         for reason in self.reasons:
@@ -51,6 +52,7 @@ class ExclusionRecord:
     reason: str
 
     def __post_init__(self) -> None:
+        check_types(self)
         _test_id(self.node_id, "node_id")
         non_empty(self.reason, "reason")
 
@@ -64,6 +66,7 @@ class VerificationPlan:
     reasons: tuple[str, ...]
 
     def __post_init__(self) -> None:
+        check_types(self)
         selected = [check.node_id for check in self.selected]
         excluded = [record.node_id for record in self.excluded]
         require(selected == sorted(set(selected)), "selected must be sorted by node_id, unique")
@@ -77,6 +80,7 @@ class ToolInfo:
     version: str
 
     def __post_init__(self) -> None:
+        check_types(self)
         non_empty(self.name, "name")
         non_empty(self.version, "version")
 
@@ -91,6 +95,7 @@ class TestResult:
     message: str | None
 
     def __post_init__(self) -> None:
+        check_types(self)
         _test_id(self.node_id, "node_id")
         non_negative(self.duration_ms, "duration_ms")
 
@@ -108,6 +113,7 @@ class VerificationRun:
     timed_out: bool
 
     def __post_init__(self) -> None:
+        check_types(self)
         validate_content_id(self.plan_id, IdPrefix.PLAN)
         require(len(self.command) >= 1, "command must not be empty")
         check_timestamp(self.started_at, "started_at")

@@ -54,9 +54,12 @@ def _check(value: object, where: str) -> None:
 def canonical_json(value: object) -> str:
     """Serialize ``value`` to canonical JSON text."""
     _check(value, "$")
-    return json.dumps(
-        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
-    )
+    try:
+        return json.dumps(
+            value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+        )
+    except RecursionError as exc:  # pathologically deep nesting (SPEC §21 threat table)
+        raise NonCanonicalValueError("value is nested too deeply to serialize") from exc
 
 
 def canonical_bytes(value: object) -> bytes:

@@ -5,7 +5,7 @@ from enum import StrEnum
 
 from rift.core.frozen import FrozenMap
 from rift.core.ids import EvidenceId, NodeId, validate_evidence_id, validate_node_id
-from rift.core.models._checks import non_empty, require, sorted_unique
+from rift.core.models._checks import check_types, non_empty, require, sorted_unique
 from rift.core.models.source import SourceLocation
 
 
@@ -114,6 +114,7 @@ class Node:
     attributes: FrozenMap = field(default_factory=FrozenMap)
 
     def __post_init__(self) -> None:
+        check_types(self)
         validate_node_id(self.id)
         _check_node_kind(self.id, self.kind)
         non_empty(self.label, "label")
@@ -130,6 +131,7 @@ class Edge:
     flags: frozenset[EdgeFlag]
 
     def __post_init__(self) -> None:
+        check_types(self)
         validate_node_id(self.source)
         validate_node_id(self.target)
         for evidence_id in self.evidence_ids:
@@ -146,5 +148,6 @@ class UnresolvedReference:
     location: SourceLocation
 
     def __post_init__(self) -> None:
+        check_types(self)
         validate_node_id(self.source)
         non_empty(self.raw, "raw")

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from rift.core.ids import SymbolId, module_node_id, symbol_node_id
-from rift.core.models._checks import non_empty, non_negative, require
+from rift.core.models._checks import check_types, non_empty, non_negative, require
 from rift.core.paths import validate_repo_path
 
 
@@ -35,6 +35,7 @@ class SourceLocation:
     end_col: int
 
     def __post_init__(self) -> None:
+        check_types(self)
         validate_repo_path(self.path, "path")
         non_negative(self.start_col, "start_col")
         non_negative(self.end_col, "end_col")
@@ -56,6 +57,7 @@ class Symbol:
     decorators: tuple[str, ...]
 
     def __post_init__(self) -> None:
+        check_types(self)
         non_empty(self.name, "name")
         expected = (
             module_node_id(self.module)

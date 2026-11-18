@@ -72,10 +72,10 @@ def symbol_node_id(module: str, qualname: str) -> NodeId:
     return NodeId(f"py:{module}:{qualname}")
 
 
-def testcase_node_id(pytest_node_id: str) -> NodeId:
+def node_id_for_test(pytest_node_id: str) -> NodeId:
     """``test:<pytest-node-id>``; the part before the first ``::`` must be a repo path.
 
-    (Not named ``test_node_id``: pytest would collect that name as a test when imported.)
+    (Not named ``test_*``: pytest collects any function starting with "test" when imported.)
     """
     path, _, _ = pytest_node_id.partition("::")
     if not is_repo_path(path):

@@ -104,6 +104,7 @@ disallow_incomplete_defs = false
 [tool.pytest.ini_options]
 minversion = "9.0"
 testpaths = ["tests"]
+pythonpath = ["."]  # lets tests import shared helpers as tests.* under importlib mode
 addopts = [
     "-ra",
     "--strict-markers",
