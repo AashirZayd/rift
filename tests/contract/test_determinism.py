@@ -1,7 +1,7 @@
 """Determinism contract (SPEC §7.6): identical bytes across processes with different hash seeds.
 
-M1 scope: canonical JSON and content IDs of core models, and real-git ChangeSets. M6 extends this
-file to whole Change Proofs.
+M1 scope: canonical JSON and content IDs of core models, and real-git ChangeSets. M2 adds Python
+AnalysisResults. M6 extends this file to whole Change Proofs.
 """
 
 import json
@@ -12,9 +12,14 @@ from pathlib import Path
 
 import pytest
 
+from rift.analysis.python.analyzer import analyze_project
+from rift.core.models.analysis import AnalysisResult
+from rift.core.serialization import from_dict, to_dict
 from tests.fixtures.git_repo import GitRepo, hermetic_git_env, lines
+from tests.fixtures.python_project import write_project
 
 PROBE = Path(__file__).with_name("determinism_probe.py")
+ANALYSIS_PROBE = Path(__file__).with_name("analysis_probe.py")
 SEEDS = ("0", "4242")
 
 
@@ -36,9 +41,13 @@ def history(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[GitRepo, s
 
 
 def _probe(repo: GitRepo, base: str, seed: str) -> dict[str, list[str]]:
+    return _run([str(PROBE), str(repo.root), base], seed)
+
+
+def _run(args: list[str], seed: str) -> dict[str, list[str]]:
     env = {**os.environ, "PYTHONHASHSEED": seed}
     proc = subprocess.run(
-        [sys.executable, str(PROBE), str(repo.root), base],
+        [sys.executable, *args],
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -72,3 +81,69 @@ def test_change_sets_are_identical_across_runs_and_clones(
     original = _probe(repo, base, "1")["output"]
     cloned = _probe(clone, base, "2")["output"]
     assert cloned[0] == original[0]  # commit-to-commit ChangeSet: independent of checkout location
+
+
+# A project exercising every analyzer feature whose output could depend on set or dict order:
+# many names per scope, star imports, name-matched methods, re-exports, dynamic behavior.
+_CORE = (
+    "__all__ = ["
+    + ", ".join(f"'f{i}'" for i in range(40))
+    + "]\n"
+    + "".join(f"def f{i}():\n    return f{(i + 1) % 40}()\n" for i in range(40))
+)
+ANALYSIS_PROJECT: dict[str, str | bytes] = {
+    "src/app/__init__.py": "from app.core import *\nfrom .models import Model as Model\n",
+    "src/app/core.py": _CORE,
+    "src/app/models.py": """
+        import importlib, sys
+        from typing import TYPE_CHECKING
+        if TYPE_CHECKING:
+            from app import core
+        try:
+            import orjson as json
+        except ImportError:
+            import json
+        class Base:
+            def save(self): return self.validate()
+            def validate(self): return True
+        class Model(Base):
+            def save(self):
+                super().save()
+                for name in ("a", "b", "c"):
+                    getattr(self, name)
+                importlib.import_module("app.core")
+                sys.path.append("x")
+                return eval("1")
+        REGISTRY = [Base, Model]
+    """,
+    "src/ns/plugin/impl.py": "from app import *\ndef run(obj):\n    obj.save()\n    f1()\n",
+    "tests/test_models.py": "from app import Model\ndef test_save():\n    Model().save()\n",
+    "broken.py": "def f(:\n",
+    "big.py": b"x = 1\n" * 10,
+    "with space/ünï.py": "import app\n",
+}
+
+
+@pytest.mark.integration
+def test_analysis_results_are_byte_identical_across_hash_seeds(tmp_path: Path) -> None:
+    root = write_project(tmp_path / "project", ANALYSIS_PROJECT)
+    first, second = (_run([str(ANALYSIS_PROBE), str(root)], seed) for seed in SEEDS)
+    assert first["set_order"] != second["set_order"]  # positive control
+    assert first["output"] == second["output"]
+    assert len(first["output"]) == len(ANALYSIS_PROJECT) + 2
+
+
+def test_analysis_results_round_trip_and_are_stable_in_process(tmp_path: Path) -> None:
+    root = write_project(tmp_path / "project", ANALYSIS_PROJECT)
+    first = analyze_project(root)
+    second = analyze_project(root)
+    assert first == second
+    kinds: set[str] = set()
+    for result in first.results:
+        data = to_dict(result)
+        assert from_dict(AnalysisResult, data) == result
+        kinds |= {e.kind.value for e in result.edges}
+    # The corpus really exercises the interesting paths.
+    assert kinds == {"imports", "calls", "inherits", "references"}
+    reasons = {u.reason.value for r in first.results for u in r.unresolved}
+    assert {"syntax_error", "exec_eval", "dynamic_attribute", "sys_path_mutation"} <= reasons
