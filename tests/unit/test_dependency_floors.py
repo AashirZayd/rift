@@ -28,8 +28,10 @@ def _floors() -> dict[str, str]:
     return floors
 
 
-def _release(text: str) -> tuple[int, ...]:
-    return tuple(int(part) for part in re.findall(r"\d+", text)[:3])
+def _release(text: str) -> tuple[int, int, int]:
+    """Release triple, zero-padded ("0.28" == "0.28.0")."""
+    parts = [int(part) for part in re.findall(r"\d+", text)[:3]] + [0, 0, 0]
+    return (parts[0], parts[1], parts[2])
 
 
 def test_declared_floors() -> None:
