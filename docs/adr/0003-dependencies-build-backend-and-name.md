@@ -97,23 +97,29 @@ Recorded here at the user's request. This adds to Decision §1 above and replace
 | Dependency | Floor | Why this floor |
 |---|---|---|
 | `jsonschema` | `>=4.0.1` | 4.0.x is the first line with `Draft202012Validator` (3.2.0 has none). **4.0.0 is yanked** on PyPI ("Improper python_requires declaration"), so resolvers skip it under `>=4.0.0`; the real floor is 4.0.1. |
-| `rich` | `>=14.2.0` | typer 0.28 alone would allow `rich>=13.8.0`, but the dev tool import-linter 2.16 requires `rich>=14.2.0`. An environment that can run the test suite therefore cannot install anything older, so 14.2.0 is the oldest version we can *prove*. We don't claim a floor CI cannot exercise. |
+| `rich` | `>=13.8.0` | typer 0.28's own floor. RIFT's `src/` never imports rich directly; only the CLI framework uses it. |
 | `typer` | `>=0.28,<0.29` | Unchanged (Decision §1). |
 
-**Proof.** The `lowest-direct` CI job (ubuntu, Python 3.11) runs `uv sync --resolution lowest-direct`
-and then the whole suite with `RIFT_EXPECT_LOWEST_DIRECT=1`. That enables
-`tests/unit/test_dependency_floors.py::test_lowest_direct_job_really_installed_the_floors`, which
-fails unless:
-- every direct dependency is installed exactly at its declared floor, and
-- the loosened floors (rich, jsonschema) are older than the versions in the committed `uv.lock`.
+**How the floors are checked.**
+- The `lowest-direct` CI job (ubuntu, Python 3.11) resolves **only the project's runtime
+  requirements** with `uv pip compile pyproject.toml --resolution lowest-direct`. It installs them
+  into a fresh venv together with the test tools, pinned to their `uv.lock` versions, and runs the
+  suite with `RIFT_EXPECT_LOWEST_DIRECT=1`.
+- `uv sync --resolution lowest-direct` is not used. It resolves the dev group too, and the dev tool
+  import-linter 2.16 requires `rich>=14.2.0`, which would have masked RIFT's real floor. (A first
+  attempt at this job did exactly that and was corrected.)
+- The layering contract test needs import-linter, so this job skips it; it runs in every gate job.
+- `test_lowest_direct_job_really_installed_the_floors` fails unless every direct dependency is
+  installed exactly at its declared floor, and the loosened floors are older than the committed
+  `uv.lock`.
+- `test_lowest_direct_job_test_tool_pins_match_the_lockfile` keeps the job's test-tool pins equal
+  to `uv.lock`.
+- `test_jsonschema_draft_2020_12_features_rift_relies_on` exercises `$defs`/`$ref`, `prefixItems`
+  with `items: false`, `patternProperties` for `x-` extensions, and `unevaluatedProperties: false`.
 
-`test_jsonschema_draft_2020_12_features_rift_relies_on` exercises the 2020-12 features the M6
-schemas will need: `$defs`/`$ref`, `prefixItems` with `items: false`, `patternProperties` for `x-`
-extensions, and `unevaluatedProperties: false`.
-
-Local run on 2026-11-18 (Windows, Python 3.11.9): lowest-direct resolved `jsonschema 4.0.1`,
-`rich 14.2.0`, `typer 0.28.0`; 360 passed, 1 skipped (symlink test, needs Windows privileges),
-1 xfailed (schema mirror, pending M6).
+**Evidence so far.** On 2026-11-18 the procedure was run locally in a clean clone (Windows,
+Python 3.11.9). It resolved `jsonschema 4.0.1`, `rich 13.8.0` and `typer 0.28.0`, and gave
+378 passed, 2 skipped, 1 xfailed. The CI job itself has **not run yet**: the branch is unpushed.
 
 **Consequences.**
 - If M6 needs jsonschema's `referencing` registry for cross-file `$ref`, the jsonschema floor rises

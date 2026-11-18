@@ -8,19 +8,22 @@ separately (see `docs/SPEC.md` §16).
 ## [Unreleased]
 
 ### Changed
-- Runtime dependency floors: `jsonschema>=4.0.1`, `rich>=14.2.0` (ADR-0003 amendment).
+- Runtime dependency floors: `jsonschema>=4.0.1` (4.0.0 is yanked), `rich>=13.8.0`
+  (ADR-0003 amendment).
 - Coverage threshold `fail_under = 85` is enforced.
 
 ### Added
 - Core (M1): every SPEC §6 model as frozen dataclasses with construction-time validation;
   explicit strict `to_dict`/`from_dict` serialization; canonical JSON; content-derived IDs with
   volatile fields stripped; injected `Clock` with RFC 3339 UTC timestamps; `RiftError` hierarchy.
-- Git layer (M1): hardened `run_git` (absolute git from absolute `PATH` entries, SPEC §8 hardening,
-  repository filter drivers neutralized), minimum git 2.30, repository discovery, current revision,
+- Git layer (M1): hardened `run_git` (absolute git from absolute `PATH` entries, SPEC §8
+  hardening, no network: `protocol.allow=never` and no lazy fetch, repository filter drivers
+  neutralized, submodules never entered), minimum git 2.30, repository discovery, current revision,
   revision validation, base resolution, and change detection for commit↔commit and
-  commit↔working tree, including untracked files.
-- CI: `git-minimum` job (git 2.30.2 in Debian bullseye); the `lowest-direct` job now asserts that it
-  installed the declared floors.
+  commit↔working tree (binary decided by content, untracked files and nested repositories).
+- CI: `git-minimum` job (git 2.30.2 in Debian bullseye); the `lowest-direct` job now resolves
+  only runtime requirements at their floors and asserts that it installed them. Neither has run
+  on GitHub yet.
 - Project foundation (M0): `src/` package layout with one docstring-only subpackage per
   architectural module, `rift --help` and `rift version [--json]`.
 - Tooling: uv lockfile, hatchling build, Ruff, mypy (strict), pytest with coverage, Hypothesis
