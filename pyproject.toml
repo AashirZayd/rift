@@ -1,0 +1,231 @@
+[project]
+name = "rift-cli"
+dynamic = ["version"]
+description = "Deterministic, evidence-backed change-impact and verification engine that emits Change Proofs."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "RIFT contributors" }]
+requires-python = ">=3.11"
+keywords = ["change-impact", "verification", "static-analysis", "testing", "provenance"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+    "Typing :: Typed",
+]
+dependencies = [
+    "jsonschema>=4.26.0",
+    "rich>=15.0.0",
+    "typer>=0.28,<0.29",
+]
+
+[project.scripts]
+rift = "rift.cli.app:app"
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.170.15",
+    "import-linter>=2.16",
+    "mypy>=2.4.1",
+    "pytest>=9.2.0",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.17.5",
+]
+
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/rift/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rift"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src/rift",
+    "/tests",
+    "/docs",
+    "/specs",
+    "/LICENSE",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/pyproject.toml",
+]
+
+# ---------------------------------------------------------------- ruff
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "SIM", "RUF", "PTH", "PL", "N", "T20", "DTZ", "TRY"]
+# Every ignore must carry a reason.
+ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    "S101",    # assert is the pytest idiom
+    "S603",    # tests spawn real subprocesses with argv lists built from sys.executable / fixed tokens
+    "PLR2004", # literal expected values are clearer than named constants in assertions
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["rift"]
+
+# ---------------------------------------------------------------- mypy
+[tool.mypy]
+python_version = "3.11"
+files = ["src", "tests"]
+mypy_path = "src"
+strict = true
+warn_unreachable = true
+explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+
+# ---------------------------------------------------------------- pytest
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--import-mode=importlib",
+    "--cov=rift",
+    "--cov-branch",
+    "--cov-report=term-missing",
+]
+xfail_strict = true
+filterwarnings = ["error"]
+markers = [
+    "slow: long-running tests, excluded from the fast loop with -m 'not slow'",
+    "integration: tests that drive real git / pytest subprocesses",
+    "security: tests for the SPEC §21 threat controls",
+]
+
+# ---------------------------------------------------------------- coverage
+[tool.coverage.run]
+source_pkgs = ["rift"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+# fail_under is enforced from M1 onward (SPEC §22). M0 reports coverage only.
+
+# ---------------------------------------------------------------- import-linter (SPEC §4.1)
+[tool.importlinter]
+root_package = "rift"
+
+[[tool.importlinter.contracts]]
+name = "SPEC 4.1 layers (lower never imports higher; '|' siblings are independent)"
+type = "layers"
+containers = ["rift"]
+layers = [
+    "cli",
+    "services",
+    "proof",
+    "policy",
+    "verification",
+    "impact | invariants",
+    "analysis",
+    "graph | evidence | cache | git | discovery | config | plugins",
+    "core",
+]
+exhaustive = true
+exhaustive_ignores = ["__main__"]
+
+[[tool.importlinter.contracts]]
+name = "core imports nothing from rift"
+type = "forbidden"
+source_modules = ["rift.core"]
+forbidden_modules = [
+    "rift.__main__",
+    "rift.cli",
+    "rift.services",
+    "rift.proof",
+    "rift.policy",
+    "rift.verification",
+    "rift.impact",
+    "rift.invariants",
+    "rift.analysis",
+    "rift.graph",
+    "rift.evidence",
+    "rift.cache",
+    "rift.git",
+    "rift.discovery",
+    "rift.config",
+    "rift.plugins",
+]
+
+[[tool.importlinter.contracts]]
+name = "plugins.api imports only rift.core"
+type = "forbidden"
+source_modules = ["rift.plugins.api"]
+forbidden_modules = [
+    "rift.__main__",
+    "rift.cli",
+    "rift.services",
+    "rift.proof",
+    "rift.policy",
+    "rift.verification",
+    "rift.impact",
+    "rift.invariants",
+    "rift.analysis",
+    "rift.graph",
+    "rift.evidence",
+    "rift.cache",
+    "rift.git",
+    "rift.discovery",
+    "rift.config",
+]
+
+[[tool.importlinter.contracts]]
+# Indirect imports are also forbidden (import-linter default): proof must not reach these via policy.
+name = "proof takes finished values (no analysis/graph/impact/verification/git)"
+type = "forbidden"
+source_modules = ["rift.proof"]
+forbidden_modules = [
+    "rift.analysis",
+    "rift.graph",
+    "rift.impact",
+    "rift.verification",
+    "rift.git",
+]
+
+[[tool.importlinter.contracts]]
+name = "cli imports only services and core (directly)"
+type = "forbidden"
+source_modules = ["rift.cli"]
+forbidden_modules = [
+    "rift.proof",
+    "rift.policy",
+    "rift.verification",
+    "rift.impact",
+    "rift.invariants",
+    "rift.analysis",
+    "rift.graph",
+    "rift.evidence",
+    "rift.cache",
+    "rift.git",
+    "rift.discovery",
+    "rift.config",
+    "rift.plugins",
+]
+# cli -> services -> <lower layers> is the intended path; only direct imports are banned.
+allow_indirect_imports = true
