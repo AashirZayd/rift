@@ -47,8 +47,15 @@ must equal `rift.__version__`.
 - **This deviates from the spec's suggested `src/rift/proof/schemas/`.** `rift.config` (L2)
   validates against `config.schema.json`. Loading that resource from `rift.proof` (L7) would make
   a lower layer depend on a higher one. `rift.core` is the lowest layer, so every layer may read it.
+- **The schema loader also lives in core** (`rift.core.schemas`: locate and parse a packaged
+  schema by name with stdlib `importlib.resources` + `json`). `rift.config`, `rift.invariants` and
+  `rift.proof` all call it. This **amends §4**, which lists schema loading under `rift.proof`.
+  `rift.proof` still owns proof *validation* (schema + referential + verdict consistency); only
+  locating and loading the file moves down.
 - No schema exists in M0, so nothing is created yet. This is implemented, and the sync test added,
   when the first schema lands (M6, or earlier if config validation arrives first).
+- The sdist `include` already lists `/specs`. This is harmless while the directory doesn't exist,
+  and ships the mirror once it does.
 
 ### 4. Distribution name: `rift-cli`
 

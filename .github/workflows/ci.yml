@@ -38,6 +38,7 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
+          version: "0.11.28"
           python-version: ${{ matrix.python-version }}
           enable-cache: true
 
@@ -64,6 +65,12 @@ jobs:
 
       - name: Wheel smoke test (fresh environment)
         run: |
+          set -euo pipefail
           wheel="$(ls dist/*.whl)"
-          uv run --isolated --no-project --with "$wheel" rift version
-          uv run --isolated --no-project --with "$wheel" rift version --json
+          expected="$(uv run --no-sync python -c 'import rift; print(rift.__version__)')"
+          # --isolated --no-project: a fresh ephemeral environment containing only the built wheel.
+          human="$(uv run --isolated --no-project --with "$wheel" rift version | tr -d '\r')"
+          json="$(uv run --isolated --no-project --with "$wheel" rift version --json | tr -d '\r')"
+          echo "human: $human"; echo "json:  $json"
+          test "$human" = "rift $expected"
+          test "$json" = "{\"name\":\"rift\",\"version\":\"$expected\"}"
