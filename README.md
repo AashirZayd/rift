@@ -2,8 +2,9 @@
 
 **Proof-carrying changes for modern software.**
 
-> **Status: pre-alpha (milestone M0, foundation only).** RIFT does not analyze anything yet.
-> The only working commands are `rift --help` and `rift version`. Everything described under
+> **Status: pre-alpha (milestone M1: core models and git layer).** RIFT does not analyze code
+> yet. The only working commands are `rift --help` and `rift version`; the git layer and models are
+> internal libraries with no CLI surface yet. Everything described under
 > "What RIFT will do" is planned, not implemented. Nothing has been released to PyPI.
 
 ## What RIFT will do
@@ -42,8 +43,8 @@ uv run rift version
 
 | Milestone | Scope | State |
 |---|---|---|
-| M0 | Foundation: packaging, tooling, CI, layering contracts | in progress |
-| M1 | Core models, canonical JSON, hardened git layer | planned |
+| M0 | Foundation: packaging, tooling, CI, layering contracts | done |
+| M1 | Core models, canonical JSON, hardened git layer | in progress |
 | M2 | Python static analyzer | planned |
 | M3 | Dependency graph | planned |
 | M4 | Impact engine | planned |

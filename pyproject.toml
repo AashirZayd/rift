@@ -23,8 +23,8 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "jsonschema>=4.26.0",
-    "rich>=15.0.0",
+    "jsonschema>=4.0.1",  # oldest non-yanked with Draft 2020-12; lowest-direct CI job (ADR-0003)
+    "rich>=13.8.0",  # = typer 0.28's floor; checked by the lowest-direct CI job (ADR-0003)
     "typer>=0.28,<0.29",
 ]
 
@@ -72,12 +72,15 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "S", "SIM", "RUF", "PTH", "PL", "N", "T20", "DTZ", "TRY"]
 # Every ignore must carry a reason.
-ignore = []
+ignore = [
+    "TRY003", # SPEC §5: RiftError subclasses carry a call-site message + hint + context by design
+]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = [
     "S101",    # assert is the pytest idiom
     "S603",    # tests spawn real subprocesses with argv lists built from sys.executable / fixed tokens
+    "S607",    # fixture builders run the real `git` from PATH, independently of rift.git
     "PLR2004", # literal expected values are clearer than named constants in assertions
 ]
 
@@ -102,6 +105,7 @@ disallow_incomplete_defs = false
 [tool.pytest.ini_options]
 minversion = "9.0"
 testpaths = ["tests"]
+pythonpath = ["."]  # lets tests import shared helpers as tests.* under importlib mode
 addopts = [
     "-ra",
     "--strict-markers",
@@ -127,7 +131,7 @@ branch = true
 
 [tool.coverage.report]
 show_missing = true
-# fail_under is enforced from M1 onward (SPEC §22). M0 reports coverage only.
+fail_under = 85  # SPEC §22: enforced from M1 onward; never lowered to make a run pass
 
 # ---------------------------------------------------------------- import-linter (SPEC §4.1)
 [tool.importlinter]

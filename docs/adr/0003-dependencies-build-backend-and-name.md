@@ -89,3 +89,39 @@ entities. M5 must still bound the file size and handle corrupt XML as evidence, 
 
 - `uv.lock` pins the exact resolution. CI installs with `uv sync --locked`.
 - The typer cap must be revisited if a typer security fix lands only in ≥ 0.29.
+
+## Amendment (M1, 2026-11-18): runtime dependency floors
+
+Recorded here at the user's request. This adds to Decision §1 above and replaces none of it.
+
+| Dependency | Floor | Why this floor |
+|---|---|---|
+| `jsonschema` | `>=4.0.1` | 4.0.x is the first line with `Draft202012Validator` (3.2.0 has none). **4.0.0 is yanked** on PyPI ("Improper python_requires declaration"), so resolvers skip it under `>=4.0.0`; the real floor is 4.0.1. |
+| `rich` | `>=13.8.0` | typer 0.28's own floor. RIFT's `src/` never imports rich directly; only the CLI framework uses it. |
+| `typer` | `>=0.28,<0.29` | Unchanged (Decision §1). |
+
+**How the floors are checked.**
+- The `lowest-direct` CI job (ubuntu, Python 3.11) resolves **only the project's runtime
+  requirements** with `uv pip compile pyproject.toml --resolution lowest-direct`. It installs them
+  into a fresh venv together with the test tools, pinned to their `uv.lock` versions, and runs the
+  suite with `RIFT_EXPECT_LOWEST_DIRECT=1`.
+- `uv sync --resolution lowest-direct` is not used. It resolves the dev group too, and the dev tool
+  import-linter 2.16 requires `rich>=14.2.0`, which would have masked RIFT's real floor. (A first
+  attempt at this job did exactly that and was corrected.)
+- The layering contract test needs import-linter, so this job skips it; it runs in every gate job.
+- `test_lowest_direct_job_really_installed_the_floors` fails unless every direct dependency is
+  installed exactly at its declared floor, and the loosened floors are older than the committed
+  `uv.lock`.
+- `test_lowest_direct_job_test_tool_pins_match_the_lockfile` keeps the job's test-tool pins equal
+  to `uv.lock`.
+- `test_jsonschema_draft_2020_12_features_rift_relies_on` exercises `$defs`/`$ref`, `prefixItems`
+  with `items: false`, `patternProperties` for `x-` extensions, and `unevaluatedProperties: false`.
+
+**Evidence so far.** On 2026-11-18 the procedure was run locally in a clean clone (Windows,
+Python 3.11.9). It resolved `jsonschema 4.0.1`, `rich 13.8.0` and `typer 0.28.0`, and gave
+378 passed, 2 skipped, 1 xfailed. The CI job itself has **not run yet**: the branch is unpushed.
+
+**Consequences.**
+- If M6 needs jsonschema's `referencing` registry for cross-file `$ref`, the jsonschema floor rises
+  to 4.18 with a superseding note here.
+- The floor test pins the declared floors exactly, so changing a floor also means updating that test.

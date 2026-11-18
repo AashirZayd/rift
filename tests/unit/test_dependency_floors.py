@@ -1,0 +1,96 @@
+"""Runtime dependency floors (ADR-0003): the oldest allowed versions must actually work.
+
+The lowest-direct CI job installs every direct dependency at its declared minimum and runs the whole
+suite, so these tests exercise the floors, not just today's lockfile versions.
+"""
+
+import os
+import re
+import subprocess
+import tomllib
+from importlib.metadata import version
+from pathlib import Path
+
+import pytest
+from jsonschema import Draft202012Validator  # type: ignore[import-untyped]  # no stubs; src use (M6) decides on types-jsonschema
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+_FLOOR = re.compile(r"^(?P<name>[A-Za-z0-9_.-]+)\s*>=\s*(?P<floor>[0-9][0-9.]*)")
+
+
+def _floors() -> dict[str, str]:
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    floors = {}
+    for requirement in pyproject["project"]["dependencies"]:
+        match = _FLOOR.match(requirement)
+        assert match is not None, f"every runtime dependency needs a >= floor: {requirement}"
+        floors[match["name"]] = match["floor"]
+    return floors
+
+
+def _release(text: str) -> tuple[int, int, int]:
+    """Release triple, zero-padded ("0.28" == "0.28.0")."""
+    parts = [int(part) for part in re.findall(r"\d+", text)[:3]] + [0, 0, 0]
+    return (parts[0], parts[1], parts[2])
+
+
+def test_declared_floors() -> None:
+    assert _floors() == {"jsonschema": "4.0.1", "rich": "13.8.0", "typer": "0.28"}
+
+
+def test_jsonschema_draft_2020_12_features_rift_relies_on() -> None:
+    schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "$defs": {"commit": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"}},
+        "properties": {
+            "base": {"$ref": "#/$defs/commit"},
+            "pair": {"type": "array", "prefixItems": [{"type": "integer"}], "items": False},
+        },
+        "patternProperties": {"^x-[a-z0-9-]+$": True},  # SPEC §16 extension keys
+        "unevaluatedProperties": False,  # unknown keys -> validation error
+    }
+    Draft202012Validator.check_schema(schema)
+    validator = Draft202012Validator(schema)
+    assert validator.is_valid({"base": "a" * 40, "pair": [1], "x-vendor": {"any": 1}})
+    assert not validator.is_valid({"base": "nope"})  # pattern reached through $ref/$defs
+    assert not validator.is_valid({"pair": [1, 2]})  # items: false after prefixItems
+    assert not validator.is_valid({"pair": ["one"]})
+    assert not validator.is_valid({"unknown": 1})  # unevaluatedProperties
+
+
+@pytest.mark.skipif(
+    os.environ.get("RIFT_EXPECT_LOWEST_DIRECT") != "1",
+    reason="only meaningful in the lowest-direct CI job, which sets RIFT_EXPECT_LOWEST_DIRECT=1",
+)
+def test_lowest_direct_job_really_installed_the_floors() -> None:
+    # `uv sync --resolution lowest-direct` rewrites uv.lock in the workspace, so compare against
+    # the committed lockfile instead.
+    lock = subprocess.run(
+        ["git", "show", "HEAD:uv.lock"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=60,
+        check=True,
+    ).stdout
+    for name, floor in _floors().items():
+        installed = version(name)
+        assert _release(installed) == _release(floor), f"{name}: {installed} != floor {floor}"
+        locked = re.search(rf'name = "{name}"\nversion = "([^"]+)"', lock)
+        assert locked is not None
+        if name in {"rich", "jsonschema"}:  # these floors were loosened below the lockfile
+            assert _release(floor) < _release(locked[1]), f"{name} floor is not older than lock"
+
+
+def test_lowest_direct_job_test_tool_pins_match_the_lockfile() -> None:
+    """The lowest-direct CI job installs test tools by exact version; keep them in sync."""
+    workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    pins = dict(re.findall(r'"([a-z][a-z0-9-]*)==([0-9][0-9.]*)"', workflow))
+    assert set(pins) == {"pytest", "pytest-cov", "hypothesis"}
+    lock = (REPO_ROOT / "uv.lock").read_text(encoding="utf-8")
+    for name, pinned in pins.items():
+        locked = re.search(rf'name = "{name}"\nversion = "([^"]+)"', lock)
+        assert locked is not None, name
+        assert pinned == locked[1], f"{name}: CI pins {pinned}, uv.lock has {locked[1]}"
