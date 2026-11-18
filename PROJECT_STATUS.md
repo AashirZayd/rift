@@ -41,6 +41,10 @@ M2 — Python analyzer — complete, awaiting review on `m2/python-analyzer` (M1
 ## Release blockers (v0.1.0)
 - Revisit typer cap before v0.1.0 — accept transitive pydantic or keep cap + document isolated install (uv tool / pipx).
 
+## M4 checklist
+(Recorded only; not implemented before M4.)
+- The analyzed file set comes from git (tracked + untracked-not-ignored) intersected with discovery, assembled in the services layer, so .gitignored dirs such as venv/ and build output are never analyzed. Ties into the core.excludesFile ADR on the M6 checklist.
+
 ## M6 checklist
 (Recorded only; not implemented before M6.)
 - Enforce sorted collections in the models (deferred M1 review item): require sorted order (or document the key) for `ImpactResult.unresolved`, `ChangeProof.limitations`, `Evidence.limitations`, `ProofVerification.runs`, `VerificationPlan.reasons` (§7.2).
@@ -62,7 +66,7 @@ M2 — Python analyzer — complete, awaiting review on `m2/python-analyzer` (M1
 - Pager canary has no positive control (git pages only on a TTY).
 - Skipped on Windows: symlink tests (git untracked symlink, discovery file/dir symlinks, POSIX symlinked-dir read) need privileges, and unreadable-file/dir tests need POSIX permissions; all run on Linux/macOS CI.
 - typer capped `>=0.28,<0.29` (ADR-0003). Root-package import from `rift.core` covered by an AST test (ADR-0002).
-- Analyzer (ADR-0007): lambdas/comprehensions share the enclosing scope (over-approximated locals); calls through variables bound to functions (`cb = f; cb()`) are not resolved; `.pyi` stubs ignored; newer-syntax detection is a per-line heuristic; results depend on the interpreter grammar (recorded as `python_version`).
+- Analyzer (ADR-0007): lambdas/comprehensions share the enclosing scope (over-approximated locals); calls through variables bound to functions (`cb = f; cb()`) are not resolved to their target but are recorded as `unknown` (ADR-0007 item 9a); attribute calls with no project method of that name are not recorded (item 9); `.pyi` stubs ignored; newer-syntax detection is a per-line heuristic; results depend on the interpreter grammar (recorded as `python_version`).
 - Monkeypatching and `globals()/locals()/vars()` writes are recorded as `dynamic_attribute`; `sys.modules` injection as `dynamic_import` (no dedicated `UnresolvedReason`; ADR-0007).
 - Discovery does not honour `.gitignore` (deterministic, independent of global excludes); exclusion config wiring is M7 (ADR-0008).
 - Read containment: check-then-open race narrowed by `(st_dev, st_ino)` comparison; residual on filesystems with unreliable inode numbers (ADR-0008).
