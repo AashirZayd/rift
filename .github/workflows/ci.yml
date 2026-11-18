@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: gate (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.11", "3.12", "3.13"]
+    env:
+      HYPOTHESIS_PROFILE: ci
+      UV_PYTHON: ${{ matrix.python-version }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+
+      - name: Install (locked)
+        run: uv sync --locked
+
+      - name: Format
+        run: uv run ruff format --check .
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Types
+        run: uv run mypy
+
+      - name: Layering
+        run: uv run lint-imports
+
+      - name: Tests
+        run: uv run pytest
+
+      - name: Build
+        run: uv build
+
+      - name: Wheel smoke test (fresh environment)
+        run: |
+          wheel="$(ls dist/*.whl)"
+          uv run --isolated --no-project --with "$wheel" rift version
+          uv run --isolated --no-project --with "$wheel" rift version --json
