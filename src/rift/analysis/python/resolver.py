@@ -640,8 +640,7 @@ class FileResolver:
     def _plain_call(self, func: ast.expr, scope: Scope, source: NodeId) -> None:
         root, attrs = chain_of(func)
         if not isinstance(root, ast.Name):
-            if attrs:
-                self._call_on_result(root, attrs, scope, source)
+            self._expression_call(func, root, attrs, scope, source)
             return
         chain = self.r.chain(self.facts, func, scope)
         if chain.complete:
@@ -658,12 +657,24 @@ class FileResolver:
         elif chain.lookup is not None and chain.lookup.status is LookupStatus.UNKNOWN:
             self._unknown_name(func, chain, source)
         elif (
-            attrs
-            and chain.outcome not in _SETTLED
+            chain.outcome not in _SETTLED
             and chain.lookup is not None
             and chain.lookup.status is not LookupStatus.BUILTIN
         ):
-            self._name_match(attrs[-1], source)  # a local / parameter receiver
+            if attrs:
+                self._name_match(attrs[-1], source)  # a local / parameter receiver
+            else:
+                self._record(func, source, UnresolvedReason.UNKNOWN)  # cb = f; cb()
+
+    def _expression_call(
+        self, func: ast.expr, root: ast.expr, attrs: list[str], scope: Scope, source: NodeId
+    ) -> None:
+        """A callee rooted in an expression, not a name: ``make().run()`` is matched by name;
+        ``handlers[k]()`` and ``make()()`` are ``unknown`` (ADR-0007 item 9a)."""
+        if attrs:
+            self._call_on_result(root, attrs, scope, source)
+        elif not isinstance(root, ast.Lambda):  # a lambda's body is analyzed in place
+            self._record(func, source, UnresolvedReason.UNKNOWN)
 
     def _call_on_result(
         self, receiver: ast.expr, attrs: list[str], scope: Scope, source: NodeId
