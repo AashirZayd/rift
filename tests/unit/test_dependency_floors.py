@@ -32,7 +32,7 @@ def _release(text: str) -> tuple[int, ...]:
 
 
 def test_declared_floors() -> None:
-    assert _floors() == {"jsonschema": "4.0.0", "rich": "13.8.0", "typer": "0.28"}
+    assert _floors() == {"jsonschema": "4.0.1", "rich": "14.2.0", "typer": "0.28"}
 
 
 def test_jsonschema_draft_2020_12_features_rift_relies_on() -> None:

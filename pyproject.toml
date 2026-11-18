@@ -23,8 +23,8 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "jsonschema>=4.0.0",  # oldest with Draft202012Validator; floor proven in CI (ADR-0003)
-    "rich>=13.8.0",  # = typer 0.28's own floor; proven in CI (ADR-0003)
+    "jsonschema>=4.0.1",  # oldest non-yanked with Draft202012Validator; proven in CI (ADR-0003)
+    "rich>=14.2.0",  # oldest provable with the dev tools installed; proven in CI (ADR-0003)
     "typer>=0.28,<0.29",
 ]
 
