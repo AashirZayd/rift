@@ -14,6 +14,7 @@ from rift.core.errors import ErrorCode
 from rift.core.ids import NodeId
 from rift.core.models.analysis import AnalysisResult, edge_sort_key, sort_unique
 from rift.core.models.graph import (
+    Confidence,
     EdgeFlag,
     EdgeKind,
     NodeKind,
@@ -179,16 +180,34 @@ def test_tests_reach_what_they_exercise(built: GraphBuild) -> None:
     )
 
 
+def built_without_dangling(results: list[AnalysisResult]) -> list[object]:
+    """The analyzer's own unresolved references across ``results``."""
+    return [ref for result in results for ref in result.unresolved]
+
+
 def test_edge_to_a_missing_node_becomes_unresolved_never_dropped(
     results: dict[str, AnalysisResult],
 ) -> None:
     partial = [r for path, r in results.items() if path != "pkg/c.py"]
     build = build_graph(partial)
     missing = {(u.source, u.reason, u.raw) for u in build.unresolved}
-    assert (n("py:pkg.m"), UnresolvedReason.MISSING_MODULE, "py:pkg.c") in missing
-    assert (n("py:pkg.m:f"), UnresolvedReason.MISSING_MODULE, "py:pkg.c:LIMIT") in missing
-    ref = next(u for u in build.unresolved if u.raw == "py:pkg.c:LIMIT")
+    assert (n("py:pkg.m"), UnresolvedReason.MISSING_MODULE, "imports py:pkg.c") in missing
+    assert (
+        n("py:pkg.m:f"),
+        UnresolvedReason.MISSING_MODULE,
+        "references py:pkg.c:LIMIT",
+    ) in missing
+    ref = next(u for u in build.unresolved if u.raw == "references py:pkg.c:LIMIT")
     assert (ref.location.path, ref.location.start_line) == ("pkg/m.py", 5)  # the source's span
+    # Every dangling edge is kept whole, with its flags: the TYPE_CHECKING import of pkg.c is
+    # distinguishable from the runtime one.
+    dangling = {(e.source, e.kind, e.target, frozenset(e.flags)) for e in build.dangling}
+    assert dangling == {
+        (n("py:pkg.m"), EdgeKind.IMPORTS, n("py:pkg.c"), frozenset()),
+        (n("py:pkg.m"), EdgeKind.IMPORTS, n("py:pkg.c"), frozenset({EdgeFlag.TYPE_CHECKING_ONLY})),
+        (n("py:pkg.m:f"), EdgeKind.REFERENCES, n("py:pkg.c:LIMIT"), frozenset()),
+    }
+    assert len(build.unresolved) == len(built_without_dangling(partial)) + 2
 
 
 def test_edge_to_a_missing_symbol_of_a_present_module_is_unknown(
@@ -203,8 +222,8 @@ def test_edge_to_a_missing_symbol_of_a_present_module_is_unknown(
     others = [r for path, r in results.items() if path != "pkg/m.py"]
     build = build_graph([*others, dataclasses.replace(m, edges=edges)])
     found = {(u.source, u.reason, u.raw): u for u in build.unresolved}
-    assert (n("py:pkg.m"), UnresolvedReason.UNKNOWN, "py:pkg.c:ghost") in found
-    anchored = found[(n("file:pkg/m.py"), UnresolvedReason.UNKNOWN, "py:pkg.m:nothere")]
+    assert (n("py:pkg.m"), UnresolvedReason.UNKNOWN, "calls py:pkg.c:ghost") in found
+    anchored = found[(n("file:pkg/m.py"), UnresolvedReason.UNKNOWN, "imports py:pkg.m:nothere")]
     assert (anchored.location.start_line, anchored.location.start_col) == (1, 0)  # top of file
 
 
@@ -225,6 +244,7 @@ def test_two_results_for_one_file_are_a_conflict(results: dict[str, AnalysisResu
 def test_empty_input_builds_an_empty_graph() -> None:
     build = build_graph([])
     assert (build.graph.node_count, build.graph.edge_count, build.unresolved) == (0, 0, ())
+    assert build.dangling == ()
 
 
 RENAMED = {
@@ -237,15 +257,79 @@ RENAMED = {
 def test_every_analyzer_edge_is_in_the_graph_unweakened(
     built: GraphBuild, results: dict[str, AnalysisResult]
 ) -> None:
-    """Every analyzer edge appears with its kind and a confidence at least as strong (only
-    duplicate merging may strengthen it); its endpoints change only by the documented renames."""
-    count = 0
+    """The graph's edges are exactly the analyzer's edges after the documented renames (none
+    dangle in the full project), each at least as strong as some occurrence."""
+    expected: dict[tuple[str, EdgeKind, str], list[AnalysisResult]] = {}
     for result in results.values():
         for edge in result.edges:
-            source = n(RENAMED.get(edge.source, edge.source))
-            target = n(RENAMED.get(edge.target, edge.target))
-            stored = built.graph.edge(source, edge.kind, target)
+            source = RENAMED.get(edge.source, edge.source)
+            target = RENAMED.get(edge.target, edge.target)
+            expected.setdefault((source, edge.kind, target), []).append(result)
+            stored = built.graph.edge(n(source), edge.kind, n(target))
             assert stored is not None, edge
-            assert stored.confidence >= edge.confidence
-            count += 1
-    assert count >= built.graph.edge_count
+    stored_keys = {(str(e.source), e.kind, str(e.target)) for e in built.graph.edges()}
+    assert stored_keys == set(expected)
+    assert built.dangling == ()
+
+
+def _build(tmp_path: Path, files: dict[str, str]) -> GraphBuild:
+    return build_graph(analyze(tmp_path, files).values())
+
+
+def test_nested_test_classes_become_test_nodes_only_when_collectable(tmp_path: Path) -> None:
+    """Review finding #3: pytest descends only into Test* classes."""
+    build = _build(
+        tmp_path,
+        {
+            "tests/test_n.py": """
+                class TestOuter:
+                    class TestInner:
+                        def test_y(self):
+                            pass
+                class Helper:
+                    class TestInner:
+                        def test_x(self):
+                            pass
+            """
+        },
+    )
+    kinds = {node.id: node.kind for node in build.graph.nodes()}
+    assert kinds[n("test:tests/test_n.py::TestOuter::TestInner::test_y")] is NodeKind.TEST
+    assert kinds[n("py:tests.test_n:Helper.TestInner.test_x")] is NodeKind.METHOD
+    assert not any("Helper" in node_id and node_id.startswith("test:") for node_id in kinds)
+
+
+def test_folding_a_module_own_constant_adds_no_self_loop(tmp_path: Path) -> None:
+    """Review finding #7: ``B = A + 1`` at module level is not stored as py:m -> py:m."""
+    build = _build(
+        tmp_path,
+        {
+            "pkg/__init__.py": "",
+            "pkg/m.py": "A = 1\nB = A + 1\ndef f():\n    return A\n",
+        },
+    )
+    loops = [e for e in build.graph.edges() if e.source == e.target]
+    assert loops == []
+    assert build.graph.edge(n("py:pkg.m:f"), EdgeKind.REFERENCES, n("py:pkg.m")) is not None
+
+
+def test_type_checking_import_does_not_inflate_a_dynamic_runtime_import(tmp_path: Path) -> None:
+    """Review finding #1, from real analyzer output: certain TYPE_CHECKING import + likely
+    import_module("pkg.c") is stored as a likely runtime edge."""
+    build = _build(
+        tmp_path,
+        {
+            "pkg/__init__.py": "",
+            "pkg/c.py": "",
+            "pkg/m.py": """
+                from typing import TYPE_CHECKING
+                import importlib
+                if TYPE_CHECKING:
+                    import pkg.c
+                importlib.import_module("pkg.c")
+            """,
+        },
+    )
+    stored = build.graph.edge(n("py:pkg.m"), EdgeKind.IMPORTS, n("py:pkg.c"))
+    assert stored is not None
+    assert (stored.confidence, stored.flags) == (Confidence.LIKELY, frozenset({EdgeFlag.DYNAMIC}))

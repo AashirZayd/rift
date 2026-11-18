@@ -4,17 +4,22 @@ Nodes:
 - one ``file:`` node per result;
 - one node per module, class, function and method symbol, with the matching :class:`NodeKind`;
 - test functions and methods become ``test:<path>::<Class>::<name>`` nodes (pytest node IDs,
-  without parameters). A test-kind symbol nested in a function (``<locals>`` in its qualname)
-  cannot be collected by pytest, so it stays a ``py:`` method or function node;
+  without parameters), but only where pytest can collect them: every enclosing class must be a
+  ``Test*`` class and there must be no ``<locals>``. Otherwise the symbol stays a ``py:`` method or
+  function node;
 - constants have no :class:`NodeKind` in v0.1. They fold into their module node, and an edge to
   ``py:m:CONST`` becomes an edge to ``py:m``. That is coarser, but every dependant of the constant
-  is still a dependant of its module.
+  is still a dependant of its module. A self-loop that only folding creates (the module using its
+  own constant) is not stored: a module trivially depends on itself.
 
 Edges keep their kind, origin, confidence, flags and evidence IDs; only endpoints renamed above
-change. An edge whose target is not a node is never dropped. It becomes an
-:class:`UnresolvedReference` from the edge's source: ``missing_module`` when the target's module has
-no node at all, else ``unknown``, with the target ID as ``raw``. The analyzer's own unresolved
-references are carried over, with the same renaming.
+change. An edge whose target is not a node is never dropped:
+- it is kept whole in :attr:`GraphBuild.dangling`;
+- it becomes an :class:`UnresolvedReference` from the edge's source, with ``raw`` =
+  ``"<kind> <target ID>"``. The reason is ``missing_module`` when the target's module has no node
+  at all, else ``unknown``.
+
+The analyzer's own unresolved references are carried over, with the same renaming.
 """
 
 from collections.abc import Iterable, Mapping
@@ -24,8 +29,13 @@ from types import MappingProxyType
 from rift.core.errors import ErrorCode
 from rift.core.frozen import FrozenMap
 from rift.core.ids import NodeId, file_node_id, module_node_id, node_id_for_test
-from rift.core.models.analysis import AnalysisResult, sort_unique, unresolved_sort_key
-from rift.core.models.graph import Node, NodeKind, UnresolvedReason, UnresolvedReference
+from rift.core.models.analysis import (
+    AnalysisResult,
+    edge_sort_key,
+    sort_unique,
+    unresolved_sort_key,
+)
+from rift.core.models.graph import Edge, Node, NodeKind, UnresolvedReason, UnresolvedReference
 from rift.core.models.source import SourceLocation, Symbol, SymbolKind
 from rift.graph.errors import GraphError
 from rift.graph.multigraph import DependencyGraph
@@ -45,17 +55,26 @@ _TEST_KINDS = frozenset({SymbolKind.TEST_FUNCTION, SymbolKind.TEST_METHOD})
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class GraphBuild:
-    """The graph plus every unresolved reference, sorted by ``unresolved_sort_key``."""
+    """The graph, every unresolved reference (sorted by ``unresolved_sort_key``), and every edge
+    whose target is not a node, unmerged and with renamed endpoints (sorted by
+    ``edge_sort_key``). The graph is mutable, so a ``GraphBuild`` is not hashable."""
 
     graph: DependencyGraph
     unresolved: tuple[UnresolvedReference, ...]
+    dangling: tuple[Edge, ...]
 
 
 def pytest_node_of(symbol: Symbol) -> NodeId | None:
-    """The pytest node ID of a test symbol, or ``None`` if pytest could not collect it."""
-    if symbol.kind not in _TEST_KINDS or "<" in symbol.qualname:
+    """The pytest node ID of a test symbol, or ``None`` if pytest could not collect it: pytest
+    descends only into ``Test*`` classes, and never into functions (``<locals>``)."""
+    parts = symbol.qualname.split(".")
+    if symbol.kind not in _TEST_KINDS or any(
+        part.startswith("<") or not part.startswith("Test") for part in parts[:-1]
+    ):
         return None
-    return node_id_for_test(f"{symbol.location.path}::{symbol.qualname.replace('.', '::')}")
+    if parts[-1].startswith("<"):
+        return None
+    return node_id_for_test(f"{symbol.location.path}::{'::'.join(parts)}")
 
 
 def _symbol_node(symbol: Symbol) -> Node:
@@ -98,6 +117,7 @@ def build_graph(results: Iterable[AnalysisResult]) -> GraphBuild:
     ordered = sorted(results, key=lambda result: result.file_path)
     graph = DependencyGraph()
     renamed: dict[NodeId, NodeId] = {}
+    folded: set[NodeId] = set()
     seen_paths: set[str] = set()
     for result in ordered:
         if result.file_path in seen_paths:
@@ -116,6 +136,7 @@ def build_graph(results: Iterable[AnalysisResult]) -> GraphBuild:
         for symbol in result.symbols:
             if symbol.kind is SymbolKind.CONSTANT:
                 renamed[NodeId(symbol.id)] = module_node_id(symbol.module)
+                folded.add(NodeId(symbol.id))
                 continue
             node = _symbol_node(symbol)
             graph.add_node(node)
@@ -123,17 +144,26 @@ def build_graph(results: Iterable[AnalysisResult]) -> GraphBuild:
                 renamed[NodeId(symbol.id)] = node.id
 
     unresolved: list[UnresolvedReference] = []
+    dangling: list[Edge] = []
     for result in ordered:
         for edge in result.edges:
             source = renamed.get(edge.source, edge.source)
             target = renamed.get(edge.target, edge.target)
+            if edge.target in folded and source == target:
+                continue  # a module using its own constant: trivially self-dependent
+            moved = (
+                edge
+                if (source, target) == (edge.source, edge.target)
+                else (replace(edge, source=source, target=target))
+            )
             if graph.has_node(target):
-                graph.add_edge(replace(edge, source=source, target=target))
+                graph.add_edge(moved)
                 continue
+            dangling.append(moved)
             unresolved.append(
                 UnresolvedReference(
                     source=source,
-                    raw=target,
+                    raw=f"{edge.kind.value} {target}",
                     reason=_missing_reason(graph, target),
                     location=_anchor(graph, source, result.file_path),
                 )
@@ -141,7 +171,11 @@ def build_graph(results: Iterable[AnalysisResult]) -> GraphBuild:
         for ref in result.unresolved:
             source = renamed.get(ref.source, ref.source)
             unresolved.append(ref if source == ref.source else replace(ref, source=source))
-    return GraphBuild(graph=graph, unresolved=sort_unique(unresolved, unresolved_sort_key))
+    return GraphBuild(
+        graph=graph,
+        unresolved=sort_unique(unresolved, unresolved_sort_key),
+        dangling=sort_unique(dangling, edge_sort_key),
+    )
 
 
 def _anchor(graph: DependencyGraph, source: NodeId, path: str) -> SourceLocation:
