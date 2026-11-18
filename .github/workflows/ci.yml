@@ -84,6 +84,10 @@ jobs:
     env:
       HYPOTHESIS_PROFILE: ci
       UV_PYTHON: "3.11"
+      # Enables tests/unit/test_dependency_floors.py::test_lowest_direct_job_really_installed_the_floors,
+      # which fails unless every direct dependency is installed exactly at its declared floor and
+      # the loosened floors are older than the committed lockfile.
+      RIFT_EXPECT_LOWEST_DIRECT: "1"
     defaults:
       run:
         shell: bash
@@ -110,3 +114,41 @@ jobs:
       - name: Tests
         # --no-sync: a plain `uv run` would re-sync to uv.lock and undo the lowest resolution.
         run: uv run --no-sync pytest
+
+  git-minimum:
+    # Proves the minimum supported git (ADR-0006): the whole suite against git 2.30.x.
+    # python:3.11-bullseye is Debian 11 and ships git 2.30.2 preinstalled (no apt needed).
+    name: tests (git 2.30, debian bullseye, py3.11)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    container:
+      image: python:3.11-bullseye
+    env:
+      HYPOTHESIS_PROFILE: ci
+      UV_PYTHON: "3.11"
+      UV_PYTHON_PREFERENCE: only-system
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Require git 2.30.x (the declared minimum)
+        run: |
+          git --version
+          git --version | grep -E '^git version 2\.30\.'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.11.28"
+          enable-cache: true
+
+      - name: Install (locked)
+        run: uv sync --locked
+
+      - name: Tests
+        run: uv run pytest

@@ -1,9 +1,10 @@
 """git version detection and the minimum supported version (ADR-0006).
 
-Minimum: **2.30**. The binding requirement is ``--end-of-options`` (git 2.24), which SPEC §8
-mandates for revision validation; other features used are older (``rev-parse
---is-shallow-repository`` 2.15, ``config --show-scope`` 2.26). 2.30 is the version CI proves in a
-Debian bullseye container (git 2.30.2), with headroom over the hard floor.
+Minimum: **2.30**, a hard floor. SPEC §8 mandates ``git rev-parse --verify --end-of-options <rev>``
+for revision validation, and ``rev-parse`` only learned ``--end-of-options`` in git 2.30.0 (release
+notes: '"git rev-parse" learned the "--end-of-options"'); git 2.24 added it to the generic option
+parser only. Other features used are older (``rev-parse --is-shallow-repository`` 2.15, ``config
+--show-scope`` 2.26, ``init -b`` 2.28). CI proves 2.30 in a Debian bullseye container (git 2.30.2).
 """
 
 import re

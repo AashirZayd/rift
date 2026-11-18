@@ -89,3 +89,33 @@ entities. M5 must still bound the file size and handle corrupt XML as evidence, 
 
 - `uv.lock` pins the exact resolution. CI installs with `uv sync --locked`.
 - The typer cap must be revisited if a typer security fix lands only in ≥ 0.29.
+
+## Amendment (M1, 2026-11-18): runtime dependency floors
+
+Recorded here at the user's request. This adds to Decision §1 above and replaces none of it.
+
+| Dependency | Floor | Why this floor |
+|---|---|---|
+| `jsonschema` | `>=4.0.1` | 4.0.x is the first line with `Draft202012Validator` (3.2.0 has none). **4.0.0 is yanked** on PyPI ("Improper python_requires declaration"), so resolvers skip it under `>=4.0.0`; the real floor is 4.0.1. |
+| `rich` | `>=14.2.0` | typer 0.28 alone would allow `rich>=13.8.0`, but the dev tool import-linter 2.16 requires `rich>=14.2.0`. An environment that can run the test suite therefore cannot install anything older, so 14.2.0 is the oldest version we can *prove*. We don't claim a floor CI cannot exercise. |
+| `typer` | `>=0.28,<0.29` | Unchanged (Decision §1). |
+
+**Proof.** The `lowest-direct` CI job (ubuntu, Python 3.11) runs `uv sync --resolution lowest-direct`
+and then the whole suite with `RIFT_EXPECT_LOWEST_DIRECT=1`. That enables
+`tests/unit/test_dependency_floors.py::test_lowest_direct_job_really_installed_the_floors`, which
+fails unless:
+- every direct dependency is installed exactly at its declared floor, and
+- the loosened floors (rich, jsonschema) are older than the versions in the committed `uv.lock`.
+
+`test_jsonschema_draft_2020_12_features_rift_relies_on` exercises the 2020-12 features the M6
+schemas will need: `$defs`/`$ref`, `prefixItems` with `items: false`, `patternProperties` for `x-`
+extensions, and `unevaluatedProperties: false`.
+
+Local run on 2026-11-18 (Windows, Python 3.11.9): lowest-direct resolved `jsonschema 4.0.1`,
+`rich 14.2.0`, `typer 0.28.0`; 360 passed, 1 skipped (symlink test, needs Windows privileges),
+1 xfailed (schema mirror, pending M6).
+
+**Consequences.**
+- If M6 needs jsonschema's `referencing` registry for cross-file `$ref`, the jsonschema floor rises
+  to 4.18 with a superseding note here.
+- The floor test pins the declared floors exactly, so changing a floor also means updating that test.
