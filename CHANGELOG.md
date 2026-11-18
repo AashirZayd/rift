@@ -13,6 +13,18 @@ separately (see `docs/SPEC.md` §16).
 - Coverage threshold `fail_under = 85` is enforced.
 
 ### Added
+- Python analyzer (M2, ADR-0007): pure static analysis with stdlib `ast`. Analyzed code is
+  never imported, executed or compiled.
+  - One `AnalysisResult` per file: symbols; `imports`/`calls`/`inherits`/`references` edges
+    with origin and ordinal confidence; unresolved references.
+  - Every SPEC §9.4 dynamic behavior is recorded.
+  - Input handling: oversized files, bad encodings, null bytes, too-deep nesting, syntax errors
+    and syntax newer than the interpreter.
+  - Namespace packages, relative imports, `TYPE_CHECKING` and `try/except ImportError` flags,
+    and literal or non-literal `__all__`.
+- Discovery (M2, ADR-0008): link-safe Python file enumeration (symlinks and junctions are never
+  followed), default and glob exclusions, and `src/` source-root autodetection.
+- Core models: `AnalysisResult` and `Diagnostic`, with strict codecs.
 - Core (M1): every SPEC §6 model as frozen dataclasses with construction-time validation;
   explicit strict `to_dict`/`from_dict` serialization; canonical JSON; content-derived IDs with
   volatile fields stripped; injected `Clock` with RFC 3339 UTC timestamps; `RiftError` hierarchy.

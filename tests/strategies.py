@@ -17,6 +17,15 @@ from rift.core.ids import (
     node_id_for_test,
     symbol_node_id,
 )
+from rift.core.models.analysis import (
+    AnalysisResult,
+    edge_sort_key,
+    limitation_sort_key,
+    sort_unique,
+    symbol_sort_key,
+    unresolved_sort_key,
+)
+from rift.core.models.analysis import diagnostic_sort_key as diagnostic_key
 from rift.core.models.change import (
     ChangedFile,
     ChangeSet,
@@ -24,6 +33,7 @@ from rift.core.models.change import (
     LineRange,
     merge_line_ranges,
 )
+from rift.core.models.diagnostic import Diagnostic, DiagnosticSeverity
 from rift.core.models.evidence import (
     Claim,
     ClaimKind,
@@ -77,6 +87,7 @@ from rift.core.models.verification import (
     VerificationPlan,
     VerificationRun,
 )
+from rift.core.paths import is_repo_path
 
 HEX = "0123456789abcdef"
 SMALL = 4  # keep generated collections small so composite models stay fast
@@ -96,7 +107,9 @@ segment = st.text(
     min_size=1,
     max_size=6,
 ).filter(lambda s: s not in {".", ".."})
-repo_path = st.lists(segment, min_size=1, max_size=3).map("/".join)
+# A top-level segment such as ``A:`` reads as a Windows drive and is rejected by design
+# (ADR-0005), so only generate paths the policy accepts.
+repo_path = st.lists(segment, min_size=1, max_size=3).map("/".join).filter(is_repo_path)
 module_name = st.lists(identifier, min_size=1, max_size=3).map(".".join)
 qualname = st.lists(
     st.one_of(identifier, st.sampled_from(["<locals>", "<lambda>"])), min_size=1, max_size=3
@@ -201,13 +214,13 @@ def change_set(draw: Any) -> ChangeSet:
 
 
 @st.composite
-def source_location(draw: Any) -> SourceLocation:
+def source_location(draw: Any, path: str | None = None) -> SourceLocation:
     start_line = draw(st.integers(1, 10**5))
     end_line = draw(st.integers(start_line, start_line + 50))
     start_col = draw(st.integers(0, 200))
     end_col = draw(st.integers(start_col if end_line == start_line else 0, 300))
     return SourceLocation(
-        path=draw(repo_path),
+        path=draw(repo_path) if path is None else path,
         start_line=start_line,
         start_col=start_col,
         end_line=end_line,
@@ -274,6 +287,95 @@ unresolved = st.builds(
     reason=st.sampled_from(UnresolvedReason),
     location=source_location(),
 )
+
+diagnostic_code = st.from_regex(r"[a-z][a-z0-9_]{0,10}", fullmatch=True)
+
+
+@st.composite
+def diagnostic(draw: Any, path: str | None = None) -> Diagnostic:
+    return Diagnostic(
+        severity=draw(st.sampled_from(DiagnosticSeverity)),
+        code=draw(diagnostic_code),
+        message=draw(nonempty_text),
+        subject=draw(st.none() | nonempty_text),
+        location=draw(st.none() | source_location(path)),
+    )
+
+
+@st.composite
+def analysis_result(draw: Any) -> AnalysisResult:
+    """Internally consistent: symbols live in the file's module, edge and unresolved sources are
+    nodes this file defines, and every collection is sorted by the model's key."""
+    path = draw(repo_path)
+    module = draw(st.none() | module_name)
+    own: list[NodeId] = [file_node_id(path)]
+    symbols: list[Symbol] = []
+    if module is not None:
+        own.append(module_node_id(module))
+        for qual in draw(st.lists(qualname, max_size=SMALL, unique=True)):
+            kind = draw(st.sampled_from([k for k in SymbolKind if k is not SymbolKind.MODULE]))
+            symbols.append(
+                Symbol(
+                    id=SymbolId(symbol_node_id(module, qual)),
+                    kind=kind,
+                    name=qual.rsplit(".", 1)[-1],
+                    qualname=qual,
+                    module=module,
+                    location=draw(source_location(path)),
+                    visibility=draw(st.sampled_from(Visibility)),
+                    decorators=tuple(draw(st.lists(nonempty_text, max_size=2))),
+                )
+            )
+        own += [NodeId(sym.id) for sym in symbols]
+    source = st.sampled_from(own)
+    edges = draw(
+        st.lists(
+            st.builds(
+                Edge,
+                source=source,
+                target=node_id,
+                kind=st.sampled_from(EdgeKind),
+                origin=st.sampled_from(EdgeOrigin),
+                confidence=st.sampled_from(Confidence),
+                evidence_ids=st.just(()),
+                flags=st.frozensets(st.sampled_from(EdgeFlag)),
+            ),
+            max_size=SMALL,
+        )
+    )
+    refs = draw(
+        st.lists(
+            st.builds(
+                UnresolvedReference,
+                source=source,
+                raw=nonempty_text,
+                reason=st.sampled_from(UnresolvedReason),
+                location=source_location(path),
+            ),
+            max_size=SMALL,
+        )
+    )
+    return AnalysisResult(
+        file_path=path,
+        module=module,
+        content_sha256=draw(hex_string(64)),
+        analyzer_name=draw(nonempty_text),
+        analyzer_version=draw(nonempty_text),
+        python_version=draw(st.from_regex(r"[0-9]\.[0-9]{1,2}", fullmatch=True)),
+        symbols=sort_unique(symbols, symbol_sort_key),
+        edges=_unique_by_key(edges, edge_sort_key),
+        unresolved=_unique_by_key(refs, unresolved_sort_key),
+        diagnostics=_unique_by_key(
+            draw(st.lists(diagnostic(path), max_size=SMALL)), diagnostic_key
+        ),
+        limitations=_unique_by_key(draw(st.lists(limitation, max_size=SMALL)), limitation_sort_key),
+    )
+
+
+def _unique_by_key(values: list[Any], key: Any) -> tuple[Any, ...]:
+    by_key = {key(value): value for value in values}
+    return tuple(by_key[k] for k in sorted(by_key))
+
 
 # --------------------------------------------------------------------------- impact
 
@@ -510,6 +612,8 @@ MODEL_STRATEGIES: dict[type[Any], st.SearchStrategy[Any]] = {
     Node: node(),
     Edge: edge,
     UnresolvedReference: unresolved,
+    Diagnostic: diagnostic(),
+    AnalysisResult: analysis_result(),
     ImpactExplanation: explanation(),
     ImpactResult: impact_result,
     PlannedCheck: planned_check,
