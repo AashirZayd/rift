@@ -1,10 +1,15 @@
 """Revision validation and base resolution (SPEC §8)."""
 
+import re
+
 from rift.core.errors import ErrorCode
 from rift.core.models.repo import COMMIT_HEX_LENGTHS, Repository
 from rift.git.errors import GitError, InvalidRevisionError, ShallowHistoryError
 from rift.git.runner import DEFAULT_TIMEOUT, run_git
 
+# In a shallow clone only an object name or ancestry syntax (`main~5`, `HEAD^`) can point "beyond
+# the fetched history"; an unknown branch name or a typo is reported as an invalid revision.
+_OBJECT_NAME = re.compile(r"[0-9a-fA-F]{4,64}")
 _SHALLOW_HINT = (
     "the clone is shallow; fetch more history (git fetch --deepen=N or git fetch --unshallow), "
     "or use `fetch-depth: 0` with actions/checkout"
@@ -39,7 +44,7 @@ def validate_revision(repo: Repository, rev: str, *, timeout: float = DEFAULT_TI
     )
     commit = result.stdout.decode("ascii", errors="replace").strip()
     if result.returncode != 0 or not commit:
-        if repo.is_shallow:
+        if repo.is_shallow and (_OBJECT_NAME.fullmatch(rev) or "~" in rev or "^" in rev):
             raise ShallowHistoryError(
                 f"revision {rev!r} is not available in this shallow clone", hint=_SHALLOW_HINT
             )

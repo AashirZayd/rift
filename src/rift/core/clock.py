@@ -7,7 +7,9 @@ from typing import Protocol
 
 from rift.core.errors import ErrorCode, ModelValidationError
 
-_TIMESTAMP = re.compile(r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$")
+# [0-9], not \d: \d matches any Unicode digit (e.g. fullwidth digits), which would let a decoded
+# timestamp re-encode differently and break the canonical fixed point.
+_TIMESTAMP = re.compile(r"^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})Z$")
 
 
 class Clock(Protocol):

@@ -38,7 +38,12 @@ def _check(value: object, where: str) -> None:
             continue
         if isinstance(current, float):
             raise NonCanonicalValueError(f"float at {path}: canonical JSON allows integers only")
-        if isinstance(current, Mapping):
+        if isinstance(current, Mapping) and not isinstance(current, dict):
+            # json.dumps only serializes real dicts; anything else (e.g. FrozenMap) must be thawed.
+            raise NonCanonicalValueError(
+                f"non-dict mapping {type(current).__name__} at {path}; thaw it first"
+            )
+        if isinstance(current, dict):
             for key, item in current.items():
                 if not isinstance(key, str):
                     raise NonCanonicalValueError(f"non-string key {key!r} at {path}")
@@ -60,6 +65,8 @@ def canonical_json(value: object) -> str:
         )
     except RecursionError as exc:  # pathologically deep nesting (SPEC §21 threat table)
         raise NonCanonicalValueError("value is nested too deeply to serialize") from exc
+    except ValueError as exc:  # e.g. an int beyond sys.get_int_max_str_digits()
+        raise NonCanonicalValueError(f"value cannot be serialized: {exc}") from exc
 
 
 def canonical_bytes(value: object) -> bytes:

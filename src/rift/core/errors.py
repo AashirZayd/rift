@@ -24,6 +24,8 @@ class ErrorCode(StrEnum):
     NO_BASE_REVISION = "no_base_revision"
     UNDECODABLE_PATH = "undecodable_path"
     UNEXPECTED_GIT_OUTPUT = "unexpected_git_output"
+    MISSING_OBJECTS = "missing_objects"
+    UNREADABLE_FILE = "unreadable_file"
 
 
 class RiftError(Exception):

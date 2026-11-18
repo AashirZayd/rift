@@ -15,7 +15,14 @@ _REPO_SCOPES = frozenset({"local", "worktree"})
 
 
 def _text(stdout: bytes) -> str:
-    return stdout.decode("utf-8", errors="strict").rstrip("\n")
+    try:
+        return stdout.decode("utf-8").rstrip("\n")
+    except UnicodeDecodeError as exc:
+        raise GitError(
+            f"git output is not valid UTF-8: {stdout[:80]!r}",
+            code=ErrorCode.UNDECODABLE_PATH,
+            hint="rename the branch or directory to a UTF-8 name",
+        ) from exc
 
 
 def open_repository(path: Path, *, timeout: float = DEFAULT_TIMEOUT) -> Repository:
@@ -92,7 +99,8 @@ def is_dirty(
         repository_config_overrides(repo.root, timeout=timeout) if overrides is None else overrides
     )
     result = run_git(
-        ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none"],
+        # --ignore-submodules=dirty: compare submodule commits only, never run git inside one.
+        ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=dirty"],
         cwd=repo.root,
         timeout=timeout,
         extra_config=extra,

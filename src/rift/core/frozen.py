@@ -58,14 +58,25 @@ def _check_frozen(value: object) -> None:
     raise ModelValidationError(f"not a frozen JSON value: {type(value).__name__}")
 
 
-def freeze(value: JsonValue) -> FrozenValue:
-    """Convert a plain JSON value (dict/list) into its frozen form."""
+MAX_DEPTH = 256  # far beyond any real RIFT document; bounds hostile input (SPEC §21)
+
+
+def freeze(value: JsonValue, *, _depth: int = 0) -> FrozenValue:
+    """Convert a plain JSON value (dict/list) into its frozen form.
+
+    Nesting deeper than ``MAX_DEPTH`` raises :class:`ModelValidationError` instead of exhausting the
+    interpreter stack.
+    """
+    if _depth > MAX_DEPTH:
+        raise ModelValidationError(f"value is nested deeper than {MAX_DEPTH} levels")
     if isinstance(value, dict):
-        return FrozenMap.of({key: freeze(item) for key, item in value.items()})
+        return FrozenMap.of({key: freeze(item, _depth=_depth + 1) for key, item in value.items()})
     if isinstance(value, list):
-        return tuple(freeze(item) for item in value)
+        return tuple(freeze(item, _depth=_depth + 1) for item in value)
     if isinstance(value, float):
         raise ModelValidationError("floats are not allowed in RIFT data")
+    if value is not None and not isinstance(value, str | int):
+        raise ModelValidationError(f"not a JSON value: {type(value).__name__}")
     return value
 
 

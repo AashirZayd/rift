@@ -47,9 +47,13 @@ def _matches(value: object, annotation: object) -> bool:  # noqa: PLR0911  # fla
     if origin in (tuple, frozenset):
         if not isinstance(value, origin):
             return False
+        items = cast("tuple[object, ...]", tuple(value))
         args = get_args(annotation)
+        if origin is tuple and args and (len(args) != 2 or args[1] is not Ellipsis):  # noqa: PLR2004  # tuple[X, ...] has exactly two args
+            # Fixed-length tuple[A, B, ...]: check arity and each position.
+            return len(items) == len(args) and all(map(_matches, items, args))
         element = args[0] if args else object
-        return all(_matches(item, element) for item in cast("tuple[object, ...]", value))
+        return all(_matches(item, element) for item in items)
     supertype = getattr(annotation, "__supertype__", None)  # typing.NewType
     if supertype is not None:
         return _matches(value, supertype)

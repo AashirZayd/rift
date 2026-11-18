@@ -15,7 +15,11 @@ from rift.core.models.repo import RepositoryRevision
 from rift.core.models.verification import ToolInfo, VerificationPlan, VerificationRun
 
 PROTOCOL_VERSION = "0.1.0"
-_SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+_SEMVER = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")  # ASCII digits only
+
+
+_SCP_LIKE = re.compile(r"^[A-Za-z0-9._~-]+@[A-Za-z0-9.-]+:")  # git@host:org/repo
+_DRIVE = re.compile(r"^[A-Za-z]:[\\/]")
 
 
 def url_has_credentials(url: str) -> bool:
@@ -23,12 +27,38 @@ def url_has_credentials(url: str) -> bool:
 
     Any password is a secret. For http(s) a bare username is treated as one too, because tokens
     are commonly passed that way (``https://<token>@host/repo``). ``ssh://git@host`` and the
-    scp form ``git@host:repo`` name a login, not a secret, and are allowed.
+    scp form ``git@host:repo`` name a login, not a secret, and are allowed. An unparseable URL is
+    reported as leaking (conservative).
     """
-    parts = urlsplit(url)
-    if parts.password:
+    try:
+        parts = urlsplit(url)
+        password, username = parts.password, parts.username
+    except ValueError:
         return True
-    return parts.scheme.lower() in {"http", "https"} and bool(parts.username)
+    if password:
+        return True
+    return parts.scheme.lower() in {"http", "https"} and bool(username)
+
+
+def remote_url_problem(url: str) -> str | None:
+    """Why ``url`` may not appear in a proof, or None if it may (SPEC §7.7, §21; ADR-0005).
+
+    Rejected: credentials in userinfo, query strings or fragments (tokens travel there too), and
+    local locations (``file:`` URLs, absolute paths, drive paths), which expose machine paths and
+    usernames.
+    """
+    if url_has_credentials(url):
+        return "remote_url must not carry credentials"
+    if url.startswith(("/", "\\")) or _DRIVE.match(url):
+        return "remote_url must not be a local path"
+    if _SCP_LIKE.match(url):
+        return None
+    parts = urlsplit(url)
+    if parts.scheme.lower() == "file" or not parts.scheme:
+        return "remote_url must be a network URL, not a local location"
+    if parts.query or parts.fragment:
+        return "remote_url must not carry a query string or fragment"
+    return None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -42,9 +72,8 @@ class ProofSubject:
         check_types(self)
         if self.remote_url is not None:
             non_empty(self.remote_url, "remote_url")
-            require(
-                not url_has_credentials(self.remote_url), "remote_url must not carry credentials"
-            )
+            problem = remote_url_problem(self.remote_url)
+            require(problem is None, problem or "")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

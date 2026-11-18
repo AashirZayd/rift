@@ -211,3 +211,68 @@ def test_planted_git_executable_in_repository_is_never_run(
     monkeypatch.setenv("PATH", os.pathsep.join([".", "", os.environ["PATH"]]))
     _every_rift_git_call(repo.root)
     assert not marker.exists()
+
+
+def test_partial_clone_never_fetches_or_runs_transport_commands(tmp_path: Path) -> None:
+    """A blob:none partial clone lacks old blobs; plain git would lazily fetch them from the
+    promisor remote (network + repository-configured transport commands). RIFT must refuse."""
+    origin = GitRepo.init(tmp_path / "origin")
+    origin.git("config", "uploadpack.allowFilter", "true")
+    for i in range(3):
+        origin.write("a.py", lines(3 + i))
+        origin.commit_all(f"c{i}")
+    clone = GitRepo(tmp_path / "partial")
+    GitRepo(tmp_path).git(
+        "clone", "-q", "--filter=blob:none", origin.root.as_uri(), str(clone.root)
+    )
+    script = tmp_path / "uploadpack.sh"
+    marker = tmp_path / "uploadpack.hit"
+    script.write_text(
+        f'#!/bin/sh\necho hit >> "{marker.as_posix()}"\nexec git upload-pack "$@"\n',
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    clone.git("config", "remote.origin.uploadpack", _shell_word(script))
+
+    with pytest.raises(GitError) as exc_info:
+        detect_changes(open_repository(clone.root), base="HEAD~2", head="HEAD~1")
+    assert exc_info.value.code is ErrorCode.MISSING_OBJECTS
+    assert exc_info.value.hint
+    assert not marker.exists(), "rift.git contacted the promisor remote"
+
+    _plain_git(clone.root, "diff", "HEAD~2", "HEAD~1")
+    assert marker.exists(), "positive control: plain git must lazily fetch via uploadpack"
+
+
+def test_submodule_filter_driver_never_runs(tmp_path: Path) -> None:
+    """A filter defined in a submodule's own config is outside the superproject's config, so
+    RIFT cannot neutralize it; it must never make git run inside the submodule at all."""
+    upstream = GitRepo.init(tmp_path / "upstream")
+    upstream.write(".gitattributes", "*.py filter=evil\n")
+    upstream.write("lib.py", lines(3))
+    upstream.commit_all("lib")
+    repo = GitRepo.init(tmp_path / "super")
+    repo.write("app.py", "1\n")
+    repo.commit_all("app")
+    repo.git(
+        "-c", "protocol.file.allow=always",
+        "submodule", "add", "-q", upstream.root.as_uri(), "sub",
+    )  # fmt: skip
+    repo.commit_all("add submodule")
+    repo.write("app.py", "2\n")
+    base = repo.git("rev-parse", "HEAD~1")
+    script, marker = _canary(tmp_path, "subfilter")
+    GitRepo(repo.root / "sub").git("config", "filter.evil.clean", _shell_word(script))
+    # Same-size edit inside the submodule: git cannot tell it changed from the size alone, so it
+    # must hash the content, which runs the clean filter.
+    repo.write("sub/lib.py", lines(3).replace("line 1", "LINE 1"))
+
+    opened = open_repository(repo.root)
+    is_dirty(opened)
+    current_revision(opened)
+    detect_changes(opened, base=base)
+    detect_changes(opened, base=base, head="HEAD")
+    assert not marker.exists(), "rift.git ran a submodule's filter driver"
+
+    _plain_git(repo.root, "status")
+    assert marker.exists(), "positive control: plain `git status` must run the submodule filter"

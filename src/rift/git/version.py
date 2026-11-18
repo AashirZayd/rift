@@ -17,7 +17,7 @@ from rift.git.errors import GitUnavailableError
 from rift.git.runner import DEFAULT_TIMEOUT, run_git
 
 MIN_GIT_VERSION: tuple[int, int, int] = (2, 30, 0)
-_VERSION = re.compile(r"\bgit version (\d+)\.(\d+)(?:\.(\d+))?")
+_VERSION = re.compile(r"\bgit version ([0-9]+)\.([0-9]+)(?:\.([0-9]+))?")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True, order=True)

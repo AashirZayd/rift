@@ -6,14 +6,19 @@ Hardening, in addition to the SPEC §8 ``-c`` overrides and environment (ADR-000
   ``git``/``git.exe`` in the analyzed repository or the current directory is never executed (on
   Windows, process creation would otherwise search the current directory first).
 - ``--no-pager`` and a closed stdin: git can never page or prompt.
+- No network, ever (SPEC §2.4): ``-c protocol.allow=never`` blocks every transport, which also stops
+  a partial clone from lazily fetching missing objects through repository-configured transport
+  commands (``remote.*.uploadpack``, ``core.sshCommand``); ``GIT_NO_LAZY_FETCH=1`` (honoured by
+  git >= 2.44) disables lazy fetching outright.
 - Callers may add per-repository ``-c`` overrides (e.g. neutralized filter drivers).
 """
 
 import os
 import subprocess
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 
 from rift.core.errors import ErrorCode
 from rift.git.errors import (
@@ -35,13 +40,18 @@ HARDENING_ARGS: tuple[str, ...] = (
     "-c",
     "color.ui=false",
 )
+# Beyond SPEC §8 (ADR-0006): RIFT never touches the network.
+NO_NETWORK_ARGS: tuple[str, ...] = ("-c", "protocol.allow=never")
 DIFF_ARGS: tuple[str, ...] = ("--no-ext-diff", "--no-textconv", "--no-color")
-GIT_ENV: dict[str, str] = {
-    "GIT_TERMINAL_PROMPT": "0",
-    "GIT_OPTIONAL_LOCKS": "0",
-    "LC_ALL": "C",
-    "GIT_PAGER": "cat",
-}
+GIT_ENV: Mapping[str, str] = MappingProxyType(
+    {
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_OPTIONAL_LOCKS": "0",
+        "LC_ALL": "C",
+        "GIT_PAGER": "cat",
+        "GIT_NO_LAZY_FETCH": "1",  # beyond SPEC §8 (ADR-0006): never fetch missing objects
+    }
+)
 DEFAULT_TIMEOUT = 60.0
 _STDERR_TAIL_LINES = 20
 _STDERR_TAIL_CHARS = 2000
@@ -89,6 +99,15 @@ def _classify_failure(result: GitResult, cwd: Path) -> GitError:
             "(RIFT never changes git config)",
             stderr_tail=tail,
         )
+    refused_transport = "transport '" in lowered and "not allowed" in lowered
+    if refused_transport or "promisor" in lowered or "lazy fetch" in lowered:
+        return GitError(
+            "git needs objects that are missing locally (partial or incomplete clone)",
+            code=ErrorCode.MISSING_OBJECTS,
+            hint="RIFT never fetches; fetch the needed history first (e.g. a full clone, or "
+            "`fetch-depth: 0` without `filter:` in actions/checkout)",
+            stderr_tail=tail,
+        )
     if "not a git repository" in lowered or "must be run in a work tree" in lowered:
         return NotARepositoryError(
             f"not inside a git working tree: {cwd}",
@@ -129,6 +148,7 @@ def run_git(
         str(locate_git()),
         "--no-pager",
         *HARDENING_ARGS,
+        *NO_NETWORK_ARGS,
         *config_overrides(extra_config),
         *args,
     ]

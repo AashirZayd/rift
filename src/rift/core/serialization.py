@@ -6,9 +6,10 @@ lists in model order, frozensets become sorted lists, enums their values, timest
 :class:`SerializationError` (ADR-0005). Every failure surfaces as ``SerializationError``.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from enum import StrEnum
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, TypeVar, cast
 
 from rift.core.canonical import JsonValue
@@ -816,41 +817,45 @@ def _decode_proof(r: _Reader) -> ChangeProof:
 
 # --------------------------------------------------------------------------- registry
 
-_CODECS: dict[type[Any], tuple[Callable[[Any], JsonDict], Callable[[_Reader], Any]]] = {
-    Repository: (_encode_repository, _decode_repository),
-    RepositoryRevision: (_encode_revision, _decode_revision),
-    LineRange: (_encode_line_range, _decode_line_range),
-    ChangedFile: (_encode_changed_file, _decode_changed_file),
-    ChangeSet: (_encode_change_set, _decode_change_set),
-    SourceLocation: (_encode_source_location, _decode_source_location),
-    Symbol: (_encode_symbol, _decode_symbol),
-    Node: (_encode_node, _decode_node),
-    Edge: (_encode_edge, _decode_edge),
-    UnresolvedReference: (_encode_unresolved, _decode_unresolved),
-    ImpactExplanation: (_encode_explanation, _decode_explanation),
-    ImpactResult: (_encode_impact, _decode_impact),
-    PlannedCheck: (_encode_planned_check, _decode_planned_check),
-    ExclusionRecord: (_encode_exclusion, _decode_exclusion),
-    VerificationPlan: (_encode_plan, _decode_plan),
-    ToolInfo: (_encode_tool, _decode_tool),
-    TestResult: (_encode_test_result, _decode_test_result),
-    VerificationRun: (_encode_run, _decode_run),
-    Evidence: (_encode_evidence, _decode_evidence),
-    Claim: (_encode_claim, _decode_claim),
-    Limitation: (_encode_limitation, _decode_limitation),
-    Scope: (_encode_scope, _decode_scope),
-    Requirement: (_encode_requirement, _decode_requirement),
-    Invariant: (_encode_invariant, _decode_invariant),
-    Policy: (_encode_policy, _decode_policy),
-    RequirementResult: (_encode_requirement_result, _decode_requirement_result),
-    PolicyResult: (_encode_policy_result, _decode_policy_result),
-    ProofSubject: (_encode_subject, _decode_subject),
-    ProofEnvironment: (_encode_environment, _decode_environment),
-    ProofVerification: (_encode_proof_verification, _decode_proof_verification),
-    ProofPolicy: (_encode_proof_policy, _decode_proof_policy),
-    PluginMetadata: (_encode_plugin, _decode_plugin),
-    ChangeProof: (_encode_proof, _decode_proof),
-}
+_CODECS: Mapping[type[Any], tuple[Callable[[Any], JsonDict], Callable[[_Reader], Any]]] = (
+    MappingProxyType(
+        {
+            Repository: (_encode_repository, _decode_repository),
+            RepositoryRevision: (_encode_revision, _decode_revision),
+            LineRange: (_encode_line_range, _decode_line_range),
+            ChangedFile: (_encode_changed_file, _decode_changed_file),
+            ChangeSet: (_encode_change_set, _decode_change_set),
+            SourceLocation: (_encode_source_location, _decode_source_location),
+            Symbol: (_encode_symbol, _decode_symbol),
+            Node: (_encode_node, _decode_node),
+            Edge: (_encode_edge, _decode_edge),
+            UnresolvedReference: (_encode_unresolved, _decode_unresolved),
+            ImpactExplanation: (_encode_explanation, _decode_explanation),
+            ImpactResult: (_encode_impact, _decode_impact),
+            PlannedCheck: (_encode_planned_check, _decode_planned_check),
+            ExclusionRecord: (_encode_exclusion, _decode_exclusion),
+            VerificationPlan: (_encode_plan, _decode_plan),
+            ToolInfo: (_encode_tool, _decode_tool),
+            TestResult: (_encode_test_result, _decode_test_result),
+            VerificationRun: (_encode_run, _decode_run),
+            Evidence: (_encode_evidence, _decode_evidence),
+            Claim: (_encode_claim, _decode_claim),
+            Limitation: (_encode_limitation, _decode_limitation),
+            Scope: (_encode_scope, _decode_scope),
+            Requirement: (_encode_requirement, _decode_requirement),
+            Invariant: (_encode_invariant, _decode_invariant),
+            Policy: (_encode_policy, _decode_policy),
+            RequirementResult: (_encode_requirement_result, _decode_requirement_result),
+            PolicyResult: (_encode_policy_result, _decode_policy_result),
+            ProofSubject: (_encode_subject, _decode_subject),
+            ProofEnvironment: (_encode_environment, _decode_environment),
+            ProofVerification: (_encode_proof_verification, _decode_proof_verification),
+            ProofPolicy: (_encode_proof_policy, _decode_proof_policy),
+            PluginMetadata: (_encode_plugin, _decode_plugin),
+            ChangeProof: (_encode_proof, _decode_proof),
+        }
+    )
+)
 
 SERIALIZABLE_MODELS: tuple[type[Any], ...] = tuple(_CODECS)
 
@@ -872,6 +877,11 @@ def _decode(model_type: type[T], data: object, what: str) -> T:
         value = codec[1](reader)
     except ModelValidationError as exc:
         raise SerializationError(f"{what}: {exc.message}") from exc
+    except (RecursionError, ValueError, TypeError) as exc:
+        # Hostile documents (deep nesting, malformed URLs, oversized ints) never escape raw.
+        if isinstance(exc, SerializationError):
+            raise
+        raise SerializationError(f"{what}: invalid document ({type(exc).__name__})") from exc
     reader.done()
     return cast("T", value)
 

@@ -35,6 +35,8 @@ VOLATILE_FIELDS = frozenset(
     {"generated_at", "collected_at", "started_at", "finished_at", "duration_ms"}
 )
 _VOLATILE_ENVIRONMENT_FIELDS = frozenset({"hostname"})
+# FrozenMap model fields holding user/producer data; their contents are never stripped.
+OPAQUE_FIELDS = frozenset({"data", "attributes"})
 
 
 def _bad_id(kind: str, value: str) -> ModelValidationError:
@@ -124,9 +126,11 @@ def validate_evidence_id(value: str) -> EvidenceId:
 
 
 def strip_volatile(payload: JsonValue, *, parent_key: str | None = None) -> JsonValue:
-    """Return a copy of ``payload`` with SPEC §7.4 volatile fields removed at every depth.
+    """Return a copy of ``payload`` with SPEC §7.4 volatile fields removed at every model depth.
 
-    ``hostname`` is volatile only directly inside an ``environment`` object.
+    ``hostname`` is volatile only directly inside an ``environment`` object. Values of the opaque
+    user-data fields (``data``, ``attributes``) are kept verbatim: a key that happens to be named
+    ``duration_ms`` inside evidence data is content, not a volatile model field.
     """
     if isinstance(payload, dict):
         out: dict[str, JsonValue] = {}
@@ -135,7 +139,7 @@ def strip_volatile(payload: JsonValue, *, parent_key: str | None = None) -> Json
                 continue
             if parent_key == "environment" and key in _VOLATILE_ENVIRONMENT_FIELDS:
                 continue
-            out[key] = strip_volatile(value, parent_key=key)
+            out[key] = value if key in OPAQUE_FIELDS else strip_volatile(value, parent_key=key)
         return out
     if isinstance(payload, list):
         return [strip_volatile(item, parent_key=parent_key) for item in payload]

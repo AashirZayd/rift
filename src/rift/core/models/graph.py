@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from enum import StrEnum
+from types import MappingProxyType
 
 from rift.core.frozen import FrozenMap
 from rift.core.ids import EvidenceId, NodeId, validate_evidence_id, validate_node_id
@@ -36,7 +37,7 @@ class EdgeOrigin(StrEnum):
     PLUGIN = "plugin"
 
 
-_CONFIDENCE_RANK = {"unknown": 0, "possible": 1, "likely": 2, "certain": 3}
+_CONFIDENCE_RANK = MappingProxyType({"unknown": 0, "possible": 1, "likely": 2, "certain": 3})
 
 
 class Confidence(StrEnum):

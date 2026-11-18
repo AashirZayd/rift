@@ -9,17 +9,29 @@ import pytest
 
 from rift.core.errors import ErrorCode
 from rift.core.models.change import ChangeStatus, LineRange
-from rift.git.errors import GitError, GitUnavailableError
+from rift.git.errors import (
+    GitError,
+    GitUnavailableError,
+    NotARepositoryError,
+    UnsafeRepositoryError,
+)
 from rift.git.parsing import (
     count_lines,
     decode_path,
     parse_filter_drivers,
     parse_hunk_ranges,
-    parse_numstat_z,
-    parse_paths_z,
     parse_raw_z,
+    parse_untracked_z,
 )
-from rift.git.runner import HARDENING_ARGS, config_overrides, locate_git, run_git
+from rift.git.runner import (
+    HARDENING_ARGS,
+    NO_NETWORK_ARGS,
+    GitResult,
+    _classify_failure,
+    config_overrides,
+    locate_git,
+    run_git,
+)
 from rift.git.version import MIN_GIT_VERSION, GitVersion, is_supported, parse_git_version
 
 A = "a" * 40
@@ -85,23 +97,11 @@ def test_count_lines() -> None:
     assert [count_lines(d) for d in (b"", b"a", b"a\n", b"a\nb", b"\n\n")] == [0, 1, 1, 2, 2]
 
 
-def test_numstat_binary_text_and_renames() -> None:
-    # Explicit join with \x00: adjacent literals ending in \0 and starting with a digit would merge
-    # into an octal escape (b"\0" b"0" -> b"\00") if a formatter joined them.
-    data = b"".join(
-        [
-            b"3\t1\ttext.py\x00",
-            b"-\t-\timage.png\x00",
-            b"0\t0\t\x00old.py\x00new.py\x00",
-            b"2\t2\ttab\there.py\x00",
-        ]
-    )
-    assert parse_numstat_z(data) == {
-        "text.py": False,
-        "image.png": True,
-        "new.py": False,
-        "tab\there.py": False,
-    }
+def test_untracked_listing_with_nested_repository_directories() -> None:
+    # Explicit join with \x00 so no formatter can merge literals into octal escapes.
+    data = b"".join([b"a b.py\x00", b"vendor/lib/\x00", b"-dash\x00"])
+    assert parse_untracked_z(data) == [("a b.py", False), ("vendor/lib", True), ("-dash", False)]
+    assert parse_untracked_z(b"") == []
 
 
 def test_hunk_ranges_new_side_old_side_and_pure_deletions() -> None:
@@ -131,9 +131,8 @@ def test_hunk_ranges_new_side_old_side_and_pure_deletions() -> None:
     assert parse_hunk_ranges(b"Binary files differ\n", old_side=False) == ()
 
 
-def test_paths_and_decode_path() -> None:
-    assert parse_paths_z(b"a b.py\0dir/c.py\0") == ["a b.py", "dir/c.py"]
-    assert parse_paths_z(b"") == []
+def test_decode_path() -> None:
+    assert decode_path(b"dir/c.py") == "dir/c.py"
     with pytest.raises(GitError) as exc_info:
         decode_path(b"bad\xffname.py")
     assert exc_info.value.code is ErrorCode.UNDECODABLE_PATH
@@ -242,7 +241,9 @@ def test_run_git_argv_shape(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> 
     argv = captured["argv"]
     assert Path(argv[0]).is_absolute()
     assert argv[1] == "--no-pager"
-    assert tuple(argv[2 : 2 + len(HARDENING_ARGS)]) == HARDENING_ARGS
+    end = 2 + len(HARDENING_ARGS)
+    assert tuple(argv[2:end]) == HARDENING_ARGS
+    assert tuple(argv[end : end + len(NO_NETWORK_ARGS)]) == ("-c", "protocol.allow=never")
     assert argv[-3:] == ["-c", "filter.x.clean=", "status"]
     kwargs = captured["kwargs"]
     assert "shell" not in kwargs
@@ -251,7 +252,34 @@ def test_run_git_argv_shape(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> 
     assert kwargs["env"]["GIT_OPTIONAL_LOCKS"] == "0"
     assert kwargs["env"]["LC_ALL"] == "C"
     assert kwargs["env"]["GIT_PAGER"] == "cat"
+    assert kwargs["env"]["GIT_NO_LAZY_FETCH"] == "1"
     assert result.stdout == b"out"
+
+
+def _failure(stderr: bytes) -> GitError:
+    return _classify_failure(
+        GitResult(args=("status",), returncode=128, stdout=b"", stderr=stderr), Path("/repo")
+    )
+
+
+def test_failure_classification() -> None:
+    unsafe = _failure(
+        b"fatal: detected dubious ownership in repository at '/repo'\n"
+        b"To add an exception for this directory, call:\n"
+        b"\tgit config --global --add safe.directory /repo\n"
+    )
+    assert isinstance(unsafe, UnsafeRepositoryError)
+    assert unsafe.code is ErrorCode.UNSAFE_REPOSITORY
+    assert "never changes git config" in (unsafe.hint or "")
+    assert isinstance(_failure(b"fatal: not a git repository"), NotARepositoryError)
+    for stderr in (
+        b"fatal: transport 'file' not allowed\nfatal: could not fetch abc from promisor remote\n",
+        b"fatal: lazy fetching disabled; some objects not available\n",
+    ):
+        assert _failure(stderr).code is ErrorCode.MISSING_OBJECTS
+    plain = _failure(b"fatal: something else\n")
+    assert plain.code is ErrorCode.GIT_FAILED
+    assert dict(plain.context) == {"exit_code": "128"}
 
 
 def test_run_git_timeout_is_structured(tmp_path: Path) -> None:

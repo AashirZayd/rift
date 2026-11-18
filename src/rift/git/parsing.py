@@ -2,22 +2,25 @@
 
 import re
 from dataclasses import dataclass
+from types import MappingProxyType
 
 from rift.core.errors import ErrorCode
 from rift.core.models.change import ChangeStatus, LineRange, merge_line_ranges
 from rift.core.paths import is_repo_path
 from rift.git.errors import GitError
 
-_STATUS = {
-    "A": ChangeStatus.ADDED,
-    "M": ChangeStatus.MODIFIED,
-    "D": ChangeStatus.DELETED,
-    "R": ChangeStatus.RENAMED,
-    "C": ChangeStatus.COPIED,
-    "T": ChangeStatus.TYPE_CHANGED,
-    # Unmerged paths (conflicts) are treated as modified: their content differs from base.
-    "U": ChangeStatus.MODIFIED,
-}
+_STATUS = MappingProxyType(
+    {
+        "A": ChangeStatus.ADDED,
+        "M": ChangeStatus.MODIFIED,
+        "D": ChangeStatus.DELETED,
+        "R": ChangeStatus.RENAMED,
+        "C": ChangeStatus.COPIED,
+        "T": ChangeStatus.TYPE_CHANGED,
+        # Unmerged paths (conflicts) are treated as modified: their content differs from base.
+        "U": ChangeStatus.MODIFIED,
+    }
+)
 _FILTER_KEY_DOTS = 2  # filter.<name>.<variable>
 _HUNK = re.compile(rb"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
 
@@ -130,26 +133,6 @@ def count_lines(data: bytes) -> int:
     return data.count(b"\n") + (0 if data.endswith(b"\n") else 1)
 
 
-def parse_numstat_z(data: bytes) -> dict[str, bool]:
-    """Parse ``git diff --numstat -z``; map each (new) path to whether git treats it as binary."""
-    tokens = _fields(data)
-    binary: dict[str, bool] = {}
-    index = 0
-    while index < len(tokens):
-        added, deleted, rest = [*tokens[index].split(b"\t", 2), b"", b""][:3]
-        is_binary = added == b"-" and deleted == b"-"
-        if rest:
-            path = decode_path(rest)
-            index += 1
-        else:  # rename/copy: "added\tdeleted\t\0old\0new"
-            if index + 2 >= len(tokens):
-                raise _unexpected("truncated numstat rename record")
-            path = decode_path(tokens[index + 2])
-            index += 3
-        binary[path] = is_binary
-    return binary
-
-
 def parse_hunk_ranges(patch: bytes, *, old_side: bool) -> tuple[LineRange, ...]:
     """Line ranges from ``-U0`` hunk headers.
 
@@ -172,9 +155,17 @@ def parse_hunk_ranges(patch: bytes, *, old_side: bool) -> tuple[LineRange, ...]:
     return merge_line_ranges(ranges)
 
 
-def parse_paths_z(data: bytes) -> list[str]:
-    """Parse ``git ls-files -z`` style output."""
-    return [decode_path(token) for token in _fields(data)]
+def parse_untracked_z(data: bytes) -> list[tuple[str, bool]]:
+    """Parse ``git ls-files --others -z``: ``(path, is_directory)`` pairs.
+
+    git lists an untracked nested repository as ``dir/`` (it does not descend into it); the
+    trailing slash is stripped and the entry flagged as a directory.
+    """
+    entries: list[tuple[str, bool]] = []
+    for token in _fields(data):
+        is_directory = token.endswith(b"/")
+        entries.append((decode_path(token[:-1] if is_directory else token), is_directory))
+    return entries
 
 
 def parse_filter_drivers(data: bytes, scopes: frozenset[str]) -> list[str]:
