@@ -72,3 +72,19 @@ def test_external_call_is_covered_by_the_import_record_only(tmp_path: Path) -> N
     source = "import os\nfrom os import getcwd\nos.getcwd()\ngetcwd()\n"
     result = analyze(tmp_path, {**BASE, "pkg/m.py": source})["pkg/m.py"]
     assert unresolved(result) == {("external_module", "os")}
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param("from pkg import v\nv()\n", id="from-import-module"),
+        pytest.param("import pkg.v\npkg.v()\n", id="dotted-module"),
+    ],
+)
+def test_calling_a_module_object_is_unknown_and_keeps_the_dependency(
+    tmp_path: Path, source: str
+) -> None:
+    result = analyze(tmp_path, {**BASE, "pkg/m.py": source})["pkg/m.py"]
+    assert {reason for reason, _ in unresolved(result)} == {"unknown"}
+    assert ("py:pkg.m", "py:pkg.v", "certain") in edge_targets(result, "references")
+    assert edge_targets(result, "calls") == set()

@@ -644,9 +644,7 @@ class FileResolver:
             return
         chain = self.r.chain(self.facts, func, scope)
         if chain.complete:
-            for target in chain.targets:
-                if target.qualname is not None:
-                    self._edge(source, target, EdgeKind.CALLS)
+            self._resolved_call(func, chain, source)
         elif chain.targets:  # partly resolved: the receiver is still a dependency
             for target in chain.targets:
                 self._edge(source, target, EdgeKind.REFERENCES)
@@ -665,6 +663,17 @@ class FileResolver:
                 self._name_match(attrs[-1], source)  # a local / parameter receiver
             else:
                 self._record(func, source, UnresolvedReason.UNKNOWN)  # cb = f; cb()
+
+    def _resolved_call(self, func: ast.expr, chain: Chain, source: NodeId) -> None:
+        """Every candidate resolved. Calling a module object (``import pkg.sub; pkg.sub()``)
+        keeps the module as a ``references`` dependency and is ``unknown`` (ADR-0007 item 9a)."""
+        callees = [t for t in chain.targets if t.qualname is not None]
+        for target in callees:
+            self._edge(source, target, EdgeKind.CALLS)
+        if not callees:
+            for target in chain.targets:
+                self._edge(source, target, EdgeKind.REFERENCES)
+            self._record(func, source, UnresolvedReason.UNKNOWN)
 
     def _expression_call(
         self, func: ast.expr, root: ast.expr, attrs: list[str], scope: Scope, source: NodeId

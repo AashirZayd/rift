@@ -189,12 +189,18 @@ The review found these problems in the first implementation. Each is fixed and h
     - a bare name bound to a local, parameter or plain assignment (`cb = f; cb()` → raw `cb`),
       or imported from a project module where it is not a function or class;
     - a subscript (`handlers[k]()` → raw `handlers[k]`);
-    - the result of a call (`make()()` → raw `make()`).
+    - the result of a call (`make()()` → raw `make()`);
+    - a module object (`import pkg.sub; pkg.sub()`), which also keeps a `references` edge to
+      the module.
 
     A directly called lambda literal (`(lambda: 1)()`) is not recorded: its body is analyzed in
     the enclosing scope (item on lambdas above). Before this amendment these calls were dropped
     silently, contradicting SPEC §2.3 and §9.3 ("otherwise unresolved"). Pinned by
     `tests/unit/analysis/test_unresolved_calls.py` and `test_extraction.py::test_scoping_rules`.
+
+    Known noise: `cls()` in a classmethod and `type(self)()` are also recorded as `unknown`.
+    That is SPEC-correct ("otherwise unresolved") but common; resolving them to the defining
+    class at `likely` is a candidate refinement.
 
 ## Alternatives considered
 
