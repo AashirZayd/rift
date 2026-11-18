@@ -12,5 +12,7 @@ separately (see `docs/SPEC.md` §16).
   architectural module, `rift --help` and `rift version [--json]`.
 - Tooling: uv lockfile, hatchling build, Ruff, mypy (strict), pytest with coverage, Hypothesis
   profiles, import-linter layering contracts.
-- CI workflow: Linux/macOS/Windows × Python 3.11–3.13, full quality gate, wheel smoke test.
+- CI workflow: Linux/macOS/Windows × Python 3.11–3.13, full quality gate, wheel smoke test;
+  a `lowest-direct` job runs the tests against the minimum allowed direct dependencies.
+- Contract test keeping the `specs/` schema mirror byte-identical to the packaged schemas.
 - Project documents: LICENSE (MIT), README, CONTRIBUTING, SECURITY, CODE_OF_CONDUCT, ADRs 0000–0003.
