@@ -25,7 +25,7 @@ M2 — Python analyzer — in progress on `m2/python-analyzer` (M1 accepted by u
 - §23 gate after review fixes: sync OK, format 103 files clean, ruff 0, mypy 0 issues in 83 files, lint-imports 8 kept / 0 broken, pytest 398 passed / 3 skipped / 1 xfailed, coverage 96.02% (fail_under 85), build OK, wheel smoke OK
 
 ## Pending
-- M2 build (§9, §24 "M2 — Python analyzer").
+- M2: implementation, tests and ADR-0007/0008 committed on `m2/python-analyzer`; next: /verify, fresh-context review, report.
 
 ## Release blockers (v0.1.0)
 - Revisit typer cap before v0.1.0 — accept transitive pydantic or keep cap + document isolated install (uv tool / pipx).
