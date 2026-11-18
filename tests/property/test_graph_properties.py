@@ -4,6 +4,7 @@
 - forward/reverse symmetry: b ∈ forward(a) ⇔ a ∈ reverse(b);
 - to_dict/from_dict round-trips;
 - output is identical for any insertion order of nodes and (duplicate) edges;
+- duplicates merge by the documented rule;
 - filters are monotonic: a stronger min_confidence, fewer kinds or a smaller max_depth never
   reach more;
 - every explanation path is a shortest path whose edges pass the filters, and it is the
@@ -19,6 +20,7 @@ from hypothesis import strategies as st
 from rift.core.canonical import canonical_json
 from rift.core.ids import NodeId
 from rift.core.models.graph import Confidence, Edge, EdgeFlag, EdgeKind, EdgeOrigin
+from rift.graph.merge import restriction_key
 from rift.graph.multigraph import DependencyGraph
 from rift.graph.traversal import Reachability
 from tests.unit.graph.helpers import edge, graph_of, nid
@@ -143,17 +145,24 @@ def test_output_is_identical_for_any_insertion_order(spec: Spec, data: st.DataOb
 
 
 @given(specs())
-def test_duplicates_merge_to_the_strongest_confidence(spec: Spec) -> None:
-    graph = spec.build()
-    strongest: dict[tuple[NodeId, EdgeKind, NodeId], Confidence] = {}
+def test_duplicates_merge_by_the_documented_rule(spec: Spec) -> None:
+    """Batch form of ADR-0009 §6: among all occurrences of one (source, kind, target), the
+    least-restricted group wins; the stored edge has that group's strongest confidence and the
+    union of its flags and evidence. Never stronger than an occurrence in the same context."""
+    groups: dict[tuple[NodeId, EdgeKind, NodeId], list[Edge]] = {}
     for e in spec.edges:
-        key = (e.source, e.kind, e.target)
-        strongest[key] = max(strongest.get(key, e.confidence), e.confidence)
-    assert graph.edge_count == len(strongest)
-    for (source, kind, target), confidence in strongest.items():
+        groups.setdefault((e.source, e.kind, e.target), []).append(e)
+    graph = spec.build()
+    assert graph.edge_count == len(groups)
+    for (source, kind, target), occurrences in groups.items():
+        least = min(restriction_key(e) for e in occurrences)
+        winners = [e for e in occurrences if restriction_key(e) == least]
         stored = graph.edge(source, kind, target)
         assert stored is not None
-        assert stored.confidence is confidence
+        assert stored.confidence is max((e.confidence for e in winners), key=lambda c: c.rank)
+        assert stored.flags == frozenset().union(*(e.flags for e in winners))
+        assert stored.evidence_ids == tuple(sorted({i for e in winners for i in e.evidence_ids}))
+        assert restriction_key(stored) == least
 
 
 @given(specs(), kind_filters, st.data())

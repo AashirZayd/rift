@@ -1,4 +1,5 @@
-"""ADR-0009: duplicate edges (same source, kind, target) merge by a fixed, order-free rule."""
+"""ADR-0009: duplicate edges (same source, kind, target) merge by a fixed, order-free rule:
+the least-restricted group of occurrences wins, then the strongest occurrence within it."""
 
 import itertools
 
@@ -39,15 +40,17 @@ def test_evidence_ids_are_unioned_and_sorted() -> None:
 @pytest.mark.parametrize(
     ("first", "second", "expected"),
     [
-        pytest.param({TC}, set(), set(), id="runtime-import-beats-type-checking-only"),
+        pytest.param({TC}, set(), set(), id="runtime-import-subsumes-type-checking-only"),
         pytest.param({TC}, {TC}, {TC}, id="type-checking-only-everywhere-stays"),
-        pytest.param({COND}, set(), set(), id="unconditional-beats-conditional"),
-        pytest.param({TC}, {COND}, set(), id="different-restrictions-cancel"),
-        pytest.param({STAR}, set(), {STAR}, id="provenance-is-unioned"),
-        pytest.param({STAR, TC}, {DYN, TC}, {STAR, DYN, TC}, id="both-rules-together"),
+        pytest.param({COND}, set(), set(), id="unconditional-subsumes-conditional"),
+        pytest.param({TC}, {COND}, {COND}, id="conditional-runtime-beats-type-checking"),
+        pytest.param({TC, COND}, {TC}, {TC}, id="fewer-restrictions-win"),
+        pytest.param({STAR}, set(), {STAR}, id="provenance-unioned-within-a-group"),
+        pytest.param({STAR, TC}, {DYN, TC}, {STAR, DYN, TC}, id="same-group-both-rules"),
+        pytest.param({STAR, TC}, {DYN}, {DYN}, id="subsumed-provenance-is-not-carried"),
     ],
 )
-def test_flags_merge_by_meaning(
+def test_flags_merge_by_restriction_group(
     first: set[EdgeFlag], second: set[EdgeFlag], expected: set[EdgeFlag]
 ) -> None:
     a, b = edge("a", "b", flags=first), edge("a", "b", flags=second)
@@ -55,11 +58,26 @@ def test_flags_merge_by_meaning(
     assert merge_edges(b, a).flags == expected
 
 
+def test_confidence_is_never_inflated_by_a_subsumed_occurrence() -> None:
+    """Review finding: a certain TYPE_CHECKING import plus a likely dynamic runtime import is a
+    likely runtime dependency, never a certain one."""
+    typing_only = edge("a", "b", confidence=Confidence.CERTAIN, flags={TC}, evidence=(1,))
+    runtime = edge("a", "b", confidence=Confidence.LIKELY, flags={DYN}, evidence=(2,))
+    for pair in ((typing_only, runtime), (runtime, typing_only)):
+        merged = merge_edges(*pair)
+        assert (merged.confidence, merged.flags, merged.evidence_ids) == (
+            Confidence.LIKELY,
+            frozenset({DYN}),
+            (ev(2),),
+        )
+
+
 def test_merge_is_order_independent_over_many_occurrences() -> None:
     occurrences = [
         edge("a", "b", confidence=Confidence.POSSIBLE, flags={TC, STAR}, evidence=(1,)),
-        edge("a", "b", confidence=Confidence.CERTAIN, origin=EdgeOrigin.PLUGIN, flags={TC}),
-        edge("a", "b", confidence=Confidence.CERTAIN, origin=EdgeOrigin.AST_STATIC, flags={DYN}),
+        edge("a", "b", confidence=Confidence.CERTAIN, origin=EdgeOrigin.PLUGIN, flags={DYN}),
+        edge("a", "b", confidence=Confidence.CERTAIN, origin=EdgeOrigin.AST_STATIC, evidence=(2,)),
+        edge("a", "b", confidence=Confidence.LIKELY, flags={TC}, evidence=(3,)),
     ]
     results = set()
     for order in itertools.permutations(occurrences):
@@ -69,8 +87,8 @@ def test_merge_is_order_independent_over_many_occurrences() -> None:
         results.add(merged)
     (only,) = results
     assert (only.confidence, only.origin) == (Confidence.CERTAIN, EdgeOrigin.AST_STATIC)
-    assert only.flags == {STAR, DYN}
-    assert only.evidence_ids == (ev(1),)
+    assert only.flags == {DYN}
+    assert only.evidence_ids == (ev(2),)
 
 
 def test_edges_of_different_identity_are_not_merged() -> None:
