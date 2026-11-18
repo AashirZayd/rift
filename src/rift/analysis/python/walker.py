@@ -127,6 +127,11 @@ class FileFacts:
     diagnostics: list[Diagnostic] = field(default_factory=list)
     limitations: list[Limitation] = field(default_factory=list)
     opaque_module_names: set[str] = field(default_factory=set)
+    constants: set[str] = field(default_factory=set)
+
+    def is_ambiguous(self, name: str, bindings: int) -> bool:
+        """Several candidate bindings, or a definition that a plain assignment may replace."""
+        return bindings > 1 or (name in self.opaque_module_names and name not in self.constants)
 
     def node_for(self, qualname: str) -> NodeId | None:
         if self.module is None or not is_qualname(qualname):
@@ -506,8 +511,13 @@ class Walker:
                 if name_node.id == "__all__":
                     simple = len(targets) == 1 and len(names) == 1
                     self._all_update(_literal_strings(value) if simple else None, replace=True)
-                elif _CONSTANT.match(name_node.id):
-                    self._symbol(name_node.id, SymbolKind.CONSTANT, node, [], top_level=True)
+                elif _CONSTANT.match(name_node.id) and self._symbol(
+                    name_node.id, SymbolKind.CONSTANT, node, [], top_level=True
+                ):
+                    self.facts.constants.add(name_node.id)
+                    self.facts.module_scope.bind(
+                        name_node.id, Binding(BindingKind.DEF, name_node.id)
+                    )
 
     # ------------------------------------------------------------------ imports
 

@@ -205,7 +205,7 @@ class Resolver:
                 targets += resolved.targets
             elif outcome is not Outcome.FOUND:
                 outcome = resolved.outcome
-        if len(bindings) > 1 or name in facts.opaque_module_names:
+        if facts.is_ambiguous(name, len(bindings)):
             targets = [t.weaker(Confidence.LIKELY) for t in targets]
         return Resolution(outcome, tuple(targets))
 
