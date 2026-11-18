@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from rift.core.canonical import NonCanonicalValueError, canonical_json
+from rift.core.canonical import JsonValue, NonCanonicalValueError, canonical_json
 from rift.core.clock import parse_timestamp
 from rift.core.errors import ModelValidationError, SerializationError
 from rift.core.frozen import MAX_DEPTH, FrozenMap, freeze
@@ -101,7 +101,7 @@ def test_colon_inside_names_is_still_fine() -> None:
 
 
 def test_volatile_names_inside_user_data_are_content() -> None:
-    payload = {
+    payload: dict[str, JsonValue] = {
         "data": {"duration_ms": 5, "hostname": "x", "started_at": "t"},
         "attributes": {"generated_at": "t"},
         "duration_ms": 9,

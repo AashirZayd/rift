@@ -190,7 +190,7 @@ def _describe(ctx: _DiffContext, change: RawChange) -> tuple[bool, tuple[LineRan
     if old.is_binary or new.is_binary:
         return True, ()
     if change.old_sha and new_sha:
-        patch = ctx.run(["diff", "-U0", "--text", *ctx.options, change.old_sha, change.new_sha])
+        patch = ctx.run(["diff", "-U0", "--text", *ctx.options, change.old_sha, new_sha])
     else:
         paths = [change.path] if change.old_path is None else [change.old_path, change.path]
         patch = ctx.run(
