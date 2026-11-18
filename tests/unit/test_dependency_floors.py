@@ -12,7 +12,7 @@ from importlib.metadata import version
 from pathlib import Path
 
 import pytest
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator  # type: ignore[import-untyped]  # no stubs; src use (M6) decides on types-jsonschema
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _FLOOR = re.compile(r"^(?P<name>[A-Za-z0-9_.-]+)\s*>=\s*(?P<floor>[0-9][0-9.]*)")
