@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from rift.core.ids import NodeId
+from rift.core.models.graph import Confidence
 
 
 class BindingKind(StrEnum):
@@ -24,6 +25,8 @@ class Binding:
     kind: BindingKind
     target: str
     attr: str = ""
+    # ``likely`` for an import resolved by pytest-style sys.path insertion (ADR-0008).
+    confidence: Confidence = Confidence.CERTAIN
 
 
 class ScopeKind(StrEnum):
@@ -46,6 +49,8 @@ class Scope:
     declared_global: frozenset[str] = frozenset()
     declared_nonlocal: frozenset[str] = frozenset()
     bindings: dict[str, list[Binding]] = field(default_factory=dict)
+    # Names (also) bound by a plain store: assignment, loop/with/except/match target, del.
+    opaque: set[str] = field(default_factory=set)
     class_qualname: str | None = None  # set on a method's scope (and on a class scope)
     self_name: str | None = None  # first parameter of a method (not for staticmethods)
 

@@ -57,13 +57,32 @@ class SourceFile:
     failure: ReadFailure | None
 
 
-def _hash_and_read(full: Path, keep: int) -> tuple[str, int, bytes | None]:
-    """Stream the file: hash everything, keep the bytes only if there are at most ``keep``."""
+def _contained(root: Path, path: str) -> bool:
+    """No path component is a link or junction and the file resolves inside ``root``: the
+    resolved path must equal the lexical one (SPEC §21.2, ADR-0008)."""
+    real_root = root.resolve(strict=True)
+    real = (root / path).resolve(strict=True)
+    return real == real_root.joinpath(*path.split("/")) and real.is_relative_to(real_root)
+
+
+class _SwappedError(OSError):
+    """The opened file is not the one that was checked (a component was swapped)."""
+
+
+def _hash_and_read(
+    full: Path, keep: int, *, expected: os.stat_result
+) -> tuple[str, int, bytes | None]:
+    """Stream the file: hash everything, keep the bytes only if there are at most ``keep``.
+    The opened descriptor must be the file that was checked (narrows the check/open race)."""
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
     digest = hashlib.sha256()
     kept = bytearray()
     size = 0
     fd = os.open(full, flags)
+    opened = os.fstat(fd)
+    if (opened.st_dev, opened.st_ino) != (expected.st_dev, expected.st_ino):
+        os.close(fd)
+        raise _SwappedError(errno.ELOOP, "file changed between check and open")
     with os.fdopen(fd, "rb") as handle:
         while chunk := handle.read(_CHUNK):
             digest.update(chunk)
@@ -85,9 +104,10 @@ def read_source(root: Path, path: str, *, max_bytes: int) -> SourceFile:  # noqa
     empty_sha = hashlib.sha256(b"").hexdigest()
     try:
         info = full.lstat()
+        contained = _contained(root, path)
     except OSError as exc:
         return _failed(path, empty_sha, 0, _os_failure(exc))
-    if not stat.S_ISREG(info.st_mode):  # symlinks are never followed (ADR-0008)
+    if not stat.S_ISREG(info.st_mode) or not contained:  # links are never followed (ADR-0008)
         return _failed(
             path,
             empty_sha,
@@ -100,7 +120,7 @@ def read_source(root: Path, path: str, *, max_bytes: int) -> SourceFile:  # noqa
             ),
         )
     try:
-        sha, size, data = _hash_and_read(full, max_bytes)
+        sha, size, data = _hash_and_read(full, max_bytes, expected=info)
     except OSError as exc:  # permission denied, or swapped for a link (O_NOFOLLOW → ELOOP)
         return _failed(path, empty_sha, 0, _os_failure(exc))
     if data is None:
@@ -139,7 +159,7 @@ def _decode(data: bytes) -> str | ReadFailure:
             line=1,
             col=0,
         )
-    if text.startswith("﻿"):  # "utf-8-sig" strips it; an explicit cookie may not
+    if text.startswith("\ufeff"):  # "utf-8-sig" strips it; an explicit cookie may not
         text = text[1:]
     if "\x00" in text:
         line = text.count("\n", 0, text.index("\x00")) + 1

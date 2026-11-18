@@ -28,8 +28,11 @@ def importable_name(rel_path: str) -> str | None:
 
 def detect_source_roots(files: Sequence[str]) -> tuple[str, ...]:
     """``("src",)`` if any discovered file under ``src/`` has an importable module name
-    (regular or namespace package, or a top-level module), else ``(".",)``."""
+    (regular or namespace package, or a top-level module), else ``(".",)``. A ``src/`` that is
+    itself a package (``src/__init__.py``) is imported as ``src.x``, so it is not a root."""
     prefix = SRC + "/"
+    if f"{prefix}__init__.py" in files:
+        return (REPO_ROOT,)
     for path in files:
         if path.startswith(prefix) and importable_name(path[len(prefix) :]) is not None:
             return (SRC,)

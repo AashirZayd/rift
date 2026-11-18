@@ -38,10 +38,12 @@ from rift.core.models.source import SourceLocation, SymbolKind
 _CONSTANT = re.compile(r"^_*[A-Z][A-Z0-9_]*$")
 _IMPORT_ERRORS = frozenset({"ImportError", "ModuleNotFoundError", "Exception", "BaseException"})
 _RAW_LIMIT = 160
+_BRANCHING = (ast.For, ast.AsyncFor, ast.While, ast.Match)
 
 LIMITATION_NON_LITERAL_ALL = "non_literal_all"
 LIMITATION_UNREPRESENTABLE_SYMBOL = "unrepresentable_symbol"
 DIAG_RELATIVE_BEYOND_TOP = "relative_import_beyond_top_level"
+DIAG_RELATIVE_NO_PACKAGE = "relative_import_without_package"
 
 
 class PendingKind(StrEnum):
@@ -126,12 +128,12 @@ class FileFacts:
     unresolved: list[UnresolvedReference] = field(default_factory=list)
     diagnostics: list[Diagnostic] = field(default_factory=list)
     limitations: list[Limitation] = field(default_factory=list)
-    opaque_module_names: set[str] = field(default_factory=set)
     constants: set[str] = field(default_factory=set)
 
     def is_ambiguous(self, name: str, bindings: int) -> bool:
         """Several candidate bindings, or a definition that a plain assignment may replace."""
-        return bindings > 1 or (name in self.opaque_module_names and name not in self.constants)
+        opaque = self.module_scope.opaque
+        return bindings > 1 or (name in opaque and name not in self.constants)
 
     def node_for(self, qualname: str) -> NodeId | None:
         if self.module is None or not is_qualname(qualname):
@@ -230,10 +232,27 @@ def _catches_import_error(handler: ast.ExceptHandler) -> bool:
     return False
 
 
-def _is_type_checking(test: ast.expr) -> bool:
-    if isinstance(test, ast.Name):
-        return test.id == "TYPE_CHECKING"
-    return isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
+def store_name(scope: Scope, name: str) -> None:
+    """A plain store (assignment, loop/with/except/match target, ``del``) of ``name``."""
+    target = scope.module() if name in scope.declared_global else scope
+    target.opaque.add(name)
+
+
+def _is_type_checking(test: ast.expr, scope: Scope) -> bool:
+    """``TYPE_CHECKING``, ``<x>.TYPE_CHECKING``, or a name imported as ``TYPE_CHECKING``."""
+    if isinstance(test, ast.Attribute):
+        return test.attr == "TYPE_CHECKING"
+    if not isinstance(test, ast.Name):
+        return False
+    if test.id == "TYPE_CHECKING":
+        return True
+    current: Scope | None = scope
+    while current is not None:
+        for binding in current.bindings.get(test.id, ()):
+            if binding.kind is BindingKind.IMPORTED and binding.attr == "TYPE_CHECKING":
+                return True
+        current = current.parent
+    return False
 
 
 def _is_staticmethod(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
@@ -269,6 +288,8 @@ class Walker:
         else:
             if scope.kind is ScopeKind.MODULE:
                 self.module_level(node)
+            if isinstance(node, _BRANCHING):  # bodies run zero or more times
+                flags = flags | {EdgeFlag.CONDITIONAL}
             self.generic(node, scope, flags)
 
     def generic(self, node: ast.AST, scope: Scope, flags: frozenset[EdgeFlag]) -> None:
@@ -279,10 +300,14 @@ class Walker:
             elif isinstance(child, ast.expr):
                 self.expr(child, scope, scope.source)
             else:  # withitem, match_case, excepthandler, keyword, pattern, ...
+                if isinstance(child, ast.MatchAs | ast.MatchStar) and child.name:
+                    store_name(scope, child.name)
+                elif isinstance(child, ast.MatchMapping) and child.rest:
+                    store_name(scope, child.rest)
                 self.generic(child, scope, flags)
 
     def if_stmt(self, node: ast.If, scope: Scope, flags: frozenset[EdgeFlag]) -> None:
-        if _is_type_checking(node.test):
+        if _is_type_checking(node.test, scope):
             self.body(node.body, scope, flags | {EdgeFlag.TYPE_CHECKING_ONLY})
         else:
             self.expr(node.test, scope, scope.source)
@@ -295,6 +320,8 @@ class Walker:
         inner = flags | {EdgeFlag.CONDITIONAL} if guarded else flags
         self.body(getattr(node, "body", []), scope, inner)
         for handler in handlers:
+            if handler.name:
+                store_name(scope, handler.name)
             if handler.type is not None:
                 self.expr(handler.type, scope, scope.source)
             self.body(handler.body, scope, inner)
@@ -329,7 +356,7 @@ class Walker:
         start_line, start_col = loc.start_line, loc.start_col
         for dec in decorators:  # the symbol's span includes its decorators
             if dec.lineno < start_line:
-                start_line, start_col = dec.lineno, max(dec.col_offset - 1, 0)
+                start_line, start_col = dec.lineno, self._at_column(dec)
         draft = SymbolDraft(
             kind=kind,
             name=qualname.rsplit(".", 1)[-1],
@@ -347,6 +374,13 @@ class Walker:
         else:
             existing.merge(draft)
         return node_id
+
+    def _at_column(self, dec: ast.expr) -> int:
+        """Byte column of the ``@`` introducing ``dec`` (``@ (lambda f: f)`` has spaces)."""
+        lines = self.facts.text.splitlines()
+        line = lines[dec.lineno - 1].encode("utf-8") if dec.lineno <= len(lines) else b""
+        at = line.rfind(b"@", 0, dec.col_offset)
+        return at if at >= 0 else max(dec.col_offset - 1, 0)
 
     def _decorator_text(self, dec: ast.expr) -> str:
         target = dec.func if isinstance(dec, ast.Call) else dec
@@ -521,16 +555,34 @@ class Walker:
 
     # ------------------------------------------------------------------ imports
 
-    def _resolve_absolute(self, name: str, node: ast.stmt, flags: frozenset[EdgeFlag]) -> bool:
+    def _localize(self, name: str) -> tuple[str, Confidence]:
+        """pytest's default ``prepend`` import mode puts a test file's base directory (the first
+        ancestor without ``__init__.py``) on ``sys.path``, so ``tests/test_a.py`` can
+        ``import helpers`` for ``tests/helpers.py``. Only for files outside the configured
+        source roots, and only ``likely``: it depends on how the tests are run (ADR-0008)."""
+        if self.index.exists(name) or not self.index.is_fallback(self.facts.path):
+            return name, Confidence.CERTAIN
+        prefix = self.index.pytest_base_package(self.facts.path)
+        if prefix and self.index.exists(f"{prefix}.{name}"):
+            return f"{prefix}.{name}", Confidence.LIKELY
+        return name, Confidence.CERTAIN
+
+    def _resolve_absolute(
+        self,
+        name: str,
+        node: ast.stmt,
+        flags: frozenset[EdgeFlag],
+        confidence: Confidence = Confidence.CERTAIN,
+    ) -> bool:
         """Edges for ``name`` and its regular ancestor packages; unresolved if it is missing.
         Returns whether ``name`` exists in the project (module or namespace package)."""
         facts = self.facts
         for ancestor in self.index.regular_ancestors(name):
             if ancestor != facts.module:  # a package's own __init__ is not a dependency
-                facts.import_edge(ancestor, flags)
+                facts.import_edge(ancestor, flags, confidence=confidence)
         if self.index.is_module(name):
             if name != facts.module:
-                facts.import_edge(name, flags)
+                facts.import_edge(name, flags, confidence=confidence)
             return True
         if self.index.is_namespace(name):
             return True
@@ -544,13 +596,16 @@ class Walker:
 
     def import_stmt(self, node: ast.Import, scope: Scope, flags: frozenset[EdgeFlag]) -> None:
         for alias in node.names:
-            name = alias.name
-            self._resolve_absolute(name, node, flags)
+            name, confidence = self._localize(alias.name)
+            self._resolve_absolute(name, node, flags, confidence)
             if alias.asname:
-                scope.bind(alias.asname, Binding(BindingKind.MODULE, name))
-            else:
-                top = name.split(".")[0]
-                scope.bind(top, Binding(BindingKind.MODULE, top))
+                scope.bind(alias.asname, Binding(BindingKind.MODULE, name, confidence=confidence))
+            else:  # ``import a.b`` binds ``a``
+                top = name[: len(name) - len(alias.name)] + alias.name.split(".")[0]
+                scope.bind(
+                    alias.name.split(".")[0],
+                    Binding(BindingKind.MODULE, top, confidence=confidence),
+                )
 
     def _relative_base(self, node: ast.ImportFrom) -> str | None:
         """Absolute module for a relative import, or ``None`` (recorded) if it escapes the
@@ -562,11 +617,16 @@ class Walker:
         parts = package.split(".") if package else []
         if package is None or level - 1 >= len(parts):
             facts.unresolved_at(node, facts.own, UnresolvedReason.MISSING_MODULE, dots)
+            unnamed = package is None
             facts.diagnostics.append(
                 Diagnostic(
                     severity=DiagnosticSeverity.WARNING,
-                    code=DIAG_RELATIVE_BEYOND_TOP,
-                    message=f"relative import {dots!r} goes beyond the top-level package",
+                    code=DIAG_RELATIVE_NO_PACKAGE if unnamed else DIAG_RELATIVE_BEYOND_TOP,
+                    message=(
+                        f"relative import {dots!r} in a file without a module name"
+                        if unnamed
+                        else f"relative import {dots!r} goes beyond the top-level package"
+                    ),
                     subject=facts.path,
                     location=facts.location(node),
                 )
@@ -581,22 +641,27 @@ class Walker:
         facts = self.facts
         if not node.level and node.module == "__future__":
             return
-        base = self._relative_base(node) if node.level else (node.module or "")
+        confidence = Confidence.CERTAIN
+        if node.level:
+            base = self._relative_base(node)
+        else:
+            base, confidence = self._localize(node.module or "")
         if base is None:
             for alias in node.names:  # names are bound to something unknown
                 if alias.name != "*":
-                    facts.opaque_module_names.add(alias.asname or alias.name)
+                    scope.opaque.add(alias.asname or alias.name)
             return
         internal = self.index.is_internal(base)
-        exists = self._resolve_absolute(base, node, flags | self._star(node))
+        exists = self._resolve_absolute(base, node, flags | self._star(node), confidence)
         for alias in node.names:
             if alias.name == "*":
                 facts.star_imports.append(StarImport(base=base, internal=internal, node=node))
                 continue
             submodule = f"{base}.{alias.name}"
             if self.index.is_module(submodule):
-                facts.import_edge(submodule, flags)
-            scope.bind(alias.asname or alias.name, Binding(BindingKind.IMPORTED, base, alias.name))
+                facts.import_edge(submodule, flags, confidence=confidence)
+            binding = Binding(BindingKind.IMPORTED, base, alias.name, confidence=confidence)
+            scope.bind(alias.asname or alias.name, binding)
             if internal and exists and not self.index.exists(submodule):
                 facts.name_checks.append(
                     NameCheck(base=base, name=alias.name, node=node, source=facts.own)
@@ -642,8 +707,8 @@ class Walker:
                         Pending(kind=PendingKind.STORE, node=node, scope=scope, source=source)
                     )
                     stack.append(node.value)
-                elif scope.kind is ScopeKind.MODULE:
-                    self.facts.opaque_module_names.add(node.id)
+                else:
+                    store_name(scope, node.id)
                 continue
             if isinstance(node, ast.Subscript) and not isinstance(node.ctx, ast.Load):
                 pending.append(

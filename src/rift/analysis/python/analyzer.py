@@ -6,6 +6,7 @@ executes or compiles analyzed code.
 """
 
 import ast
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -73,7 +74,9 @@ def analyze_files(
         raise AnalysisError("analysis root must be an existing absolute directory")
     paths = sorted(set(files))
     for path in paths:
-        if not is_repo_path(path) or not path.endswith(".py"):
+        # On Windows a backslash is a separator: "..\\x" would escape the root.
+        windows_escape = os.name == "nt" and ("\\" in path or ":" in path)
+        if not is_repo_path(path) or not path.endswith(".py") or windows_escape:
             raise AnalysisError(f"not a repository-relative .py path: {path!r}")
     roots = (
         tuple(validate_source_root(r) for r in opts.source_roots)
@@ -92,8 +95,16 @@ def analyze_files(
             else:
                 facts[source.path] = walked
     resolver = Resolver(index, facts.values())
-    for file_facts in facts.values():
-        FileResolver(resolver, file_facts).run()
+    for path, file_facts in list(facts.items()):
+        try:
+            FileResolver(resolver, file_facts).run()
+        except RecursionError:  # safety net: one pathological file never sinks the project
+            failures[path] = ReadFailure(
+                code=FailureCode.SOURCE_TOO_COMPLEX,
+                message="name resolution is too deep to analyze",
+                line=1,
+                col=0,
+            )
     python_version = running_python_version()
     results = tuple(
         _result(source, index, facts.get(source.path), failures.get(source.path), python_version)

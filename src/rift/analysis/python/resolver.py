@@ -12,11 +12,11 @@ never guessed (SPEC §9.4).
 """
 
 import ast
-import builtins
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 
+from rift.analysis.python.builtin_names import BUILTIN_NAMES
 from rift.analysis.python.modules import ModuleIndex
 from rift.analysis.python.scopes import Binding, BindingKind, Scope, ScopeKind
 from rift.analysis.python.walker import ClassFacts, FileFacts, Pending, PendingKind, chain_of
@@ -31,7 +31,7 @@ from rift.core.models.graph import (
 )
 from rift.core.models.source import SymbolKind
 
-_MAX_DEPTH = 32
+_MAX_DEPTH = 64  # re-export / star / base-class hops (bounded recursion)
 # Names every module/class/function can see without binding them.
 _IMPLICIT = frozenset(
     {
@@ -40,7 +40,7 @@ _IMPLICIT = frozenset(
         "__qualname__", "__class__", "__debug__",
     }
 )  # fmt: skip
-_BUILTINS = frozenset(dir(builtins)) | _IMPLICIT
+_BUILTINS = BUILTIN_NAMES | _IMPLICIT
 
 IMPORT_FUNCTIONS = frozenset(
     {"importlib.import_module", "importlib.__import__", "builtins.__import__"}
@@ -78,10 +78,13 @@ class Outcome(StrEnum):
     GETATTR = "getattr"  # the module defines __getattr__
     STAR_UNKNOWN = "star_unknown"  # may come from a star import whose names are unknown
     UNPARSED = "unparsed"  # the module exists but could not be analyzed
+    UNRESOLVABLE = "unresolvable"  # a re-export/star cycle, or deeper than the cap
 
 
 # Outcomes that end resolution without guessing: the import itself was already recorded.
-_SETTLED = frozenset({Outcome.EXTERNAL, Outcome.MISSING, Outcome.UNPARSED, Outcome.GETATTR})
+_SETTLED = frozenset(
+    {Outcome.EXTERNAL, Outcome.MISSING, Outcome.UNPARSED, Outcome.GETATTR, Outcome.UNRESOLVABLE}
+)
 
 
 class LookupStatus(StrEnum):
@@ -143,6 +146,12 @@ class Chain:
     outcome: Outcome  # FOUND, or why the root did not resolve
 
 
+def _distinct(targets: Iterable[Target]) -> tuple[Target, ...]:
+    """Drop repeats, keeping first-seen order. Without this, candidate lists grow
+    exponentially through diamond-shaped re-export or star-import graphs."""
+    return tuple(dict.fromkeys(targets))
+
+
 class Resolver:
     """Shared, read-only view of every module's facts."""
 
@@ -158,23 +167,43 @@ class Resolver:
                         methods.setdefault(draft.name, []).append(node_id)
         self._methods = {name: tuple(sorted(ids)) for name, ids in methods.items()}
         self._base_cache: dict[tuple[str, str], tuple[Target, ...]] = {}
+        self._members: dict[tuple[str, str], Resolution] = {}
+        self._active: set[tuple[str, str]] = set()  # membership only: cycle detection
 
     # ------------------------------------------------------------------ module members
 
-    def member(  # noqa: PLR0911  # one exit per step of Python's attribute lookup order
-        self, module: str, name: str, seen: frozenset[tuple[str, str]] = frozenset()
-    ) -> Resolution:
+    def member(self, module: str, name: str) -> Resolution:
         """Resolve ``module.name`` the way attribute access / ``from module import name`` does:
-        the module's own bindings first, then a submodule, then ``__getattr__``/star imports."""
+        the module's own bindings first, then a submodule, then ``__getattr__``/star imports.
+
+        Memoized project-wide, so re-export and star-import fan-out cost is linear in the number
+        of ``(module, name)`` pairs. A cycle or a chain deeper than the cap is ``UNRESOLVABLE``
+        (recorded as ``unknown``, never guessed). Resolution order is fixed (sorted files, source
+        order), so memoized results are deterministic."""
+        key = (module, name)
+        cached = self._members.get(key)
+        if cached is not None:
+            return cached
+        if key in self._active or len(self._active) >= _MAX_DEPTH:
+            return Resolution(Outcome.UNRESOLVABLE)
+        self._active.add(key)
+        try:
+            result = self._member(module, name)
+        finally:
+            self._active.discard(key)
+        self._members[key] = result
+        return result
+
+    def _member(self, module: str, name: str) -> Resolution:  # noqa: PLR0911  # lookup order
         if not self.index.is_internal(module):
             return Resolution(Outcome.EXTERNAL)
-        key = (module, name)
         facts = self.facts.get(module)
         submodule = f"{module}.{name}"
-        if facts is not None and key not in seen and len(seen) < _MAX_DEPTH:
+        if facts is not None:
             bindings = facts.module_scope.bindings.get(name)
             if bindings:
-                return self._bindings(facts, bindings, name, seen | {key})
+                ambiguous = facts.is_ambiguous(name, len(bindings))
+                return self.resolve_bindings(facts, bindings, ambiguous=ambiguous)
             if name in facts.module_scope.bound and not self.index.exists(submodule):
                 return Resolution(Outcome.OPAQUE)
         if self.index.is_module(submodule):
@@ -186,32 +215,26 @@ class Resolver:
         if facts.has_getattr:
             return Resolution(Outcome.GETATTR)
         if facts.star_imports:
-            return self.via_star(facts, name, seen | {key})
+            return self.via_star(facts, name)
         return Resolution(Outcome.MISSING)
 
-    def _bindings(
-        self,
-        facts: FileFacts,
-        bindings: list[Binding],
-        name: str,
-        seen: frozenset[tuple[str, str]],
+    def resolve_bindings(
+        self, facts: FileFacts, bindings: Iterable[Binding], *, ambiguous: bool
     ) -> Resolution:
         targets: list[Target] = []
         outcome = Outcome.OPAQUE
         for binding in bindings:
-            resolved = self.binding(facts, binding, seen)
+            resolved = self.binding(facts, binding)
             if resolved.outcome is Outcome.FOUND:
                 outcome = Outcome.FOUND
                 targets += resolved.targets
             elif outcome is not Outcome.FOUND:
                 outcome = resolved.outcome
-        if facts.is_ambiguous(name, len(bindings)):
+        if ambiguous:
             targets = [t.weaker(Confidence.LIKELY) for t in targets]
-        return Resolution(outcome, tuple(targets))
+        return Resolution(outcome, _distinct(targets))
 
-    def binding(
-        self, facts: FileFacts, binding: Binding, seen: frozenset[tuple[str, str]] = frozenset()
-    ) -> Resolution:
+    def binding(self, facts: FileFacts, binding: Binding) -> Resolution:
         """Resolve one binding made in ``facts``' module."""
         if binding.kind is BindingKind.DEF:
             if facts.module is None:
@@ -220,12 +243,15 @@ class Resolver:
             return Resolution(Outcome.FOUND, (target,))
         if binding.kind is BindingKind.MODULE:
             if self.index.exists(binding.target):
-                return Resolution(
-                    Outcome.FOUND, (Target(binding.target, None, Confidence.CERTAIN),)
-                )
+                target = Target(binding.target, None, binding.confidence)
+                return Resolution(Outcome.FOUND, (target,))
             internal = self.index.is_internal(binding.target)
             return Resolution(Outcome.MISSING if internal else Outcome.EXTERNAL)
-        return self.member(binding.target, binding.attr, seen)
+        resolved = self.member(binding.target, binding.attr)
+        if binding.confidence is Confidence.CERTAIN:
+            return resolved
+        weaker = tuple(t.weaker(binding.confidence) for t in resolved.targets)
+        return Resolution(resolved.outcome, weaker)
 
     def star_determinable(self, module: str) -> bool:
         """Can the names ``from module import *`` binds be listed statically?"""
@@ -239,9 +265,7 @@ class Resolver:
             return name in facts.all_names
         return not name.startswith("_") and name in facts.module_scope.bound
 
-    def via_star(
-        self, facts: FileFacts, name: str, seen: frozenset[tuple[str, str]] = frozenset()
-    ) -> Resolution:
+    def via_star(self, facts: FileFacts, name: str) -> Resolution:
         targets: list[Target] = []
         unknown = False
         for star in facts.star_imports:
@@ -251,14 +275,37 @@ class Resolver:
                     continue
             elif not self.exported(star.base, name):
                 continue
-            resolved = self.member(star.base, name, seen)
+            resolved = self.member(star.base, name)
+            if resolved.outcome is Outcome.UNRESOLVABLE:
+                unknown = True
             targets += [
                 Target(t.module, t.qualname, Confidence.LIKELY, via_star=True)
                 for t in resolved.targets
             ]
         if targets:
-            return Resolution(Outcome.FOUND, tuple(targets))
+            return Resolution(Outcome.FOUND, _distinct(targets))
         return Resolution(Outcome.STAR_UNKNOWN if unknown else Outcome.MISSING)
+
+    def external_name(self, module: str, name: str) -> str | None:
+        """Follow re-exports through project modules to the external dotted name they bind
+        (``compat.import_module`` is ``importlib.import_module``), so dynamic APIs are
+        recognised however they were imported (SPEC §9.4). Cycle-safe and depth-capped."""
+        seen: set[tuple[str, str]] = set()
+        while (module, name) not in seen and len(seen) < _MAX_DEPTH:
+            seen.add((module, name))
+            if not self.index.is_internal(module):
+                return f"{module}.{name}"
+            facts = self.facts.get(module)
+            bindings = facts.module_scope.bindings.get(name) if facts is not None else None
+            if not bindings:
+                return None
+            binding = bindings[0]
+            if binding.kind is BindingKind.MODULE:
+                return None if self.index.is_internal(binding.target) else binding.target
+            if binding.kind is not BindingKind.IMPORTED:
+                return None
+            module, name = binding.target, binding.attr
+        return None
 
     # ------------------------------------------------------------------ classes
 
@@ -340,7 +387,8 @@ class Resolver:
 
     def qualified(self, expr: ast.expr, scope: Scope) -> str | None:
         """Fully qualified dotted name of a module-rooted expression (``importlib.import_module``
-        however it was imported), used to recognise dynamic APIs."""
+        however it was imported, including through project re-exports), used to recognise
+        dynamic APIs."""
         root, attrs = chain_of(expr)
         if not isinstance(root, ast.Name):
             return None
@@ -351,23 +399,25 @@ class Resolver:
             if binding.kind is BindingKind.MODULE:
                 return ".".join([binding.target, *attrs])
             if binding.kind is BindingKind.IMPORTED:
-                return ".".join([binding.target, binding.attr, *attrs])
+                base = self.external_name(binding.target, binding.attr)
+                if base is not None:
+                    return ".".join([base, *attrs])
         return None
 
     def chain(self, facts: FileFacts, expr: ast.expr, scope: Scope) -> Chain:
-        """Resolve ``a.b.c`` as far as possible from ``scope`` in ``facts``' module."""
+        """Resolve ``a.b.c`` as far as possible from ``scope`` in ``facts``' module, following
+        every candidate binding."""
         root, attrs = chain_of(expr)
         if not isinstance(root, ast.Name):
             return Chain((), False, None, Outcome.OPAQUE)
         found = self.lookup(root.id, scope)
-        if found.status is LookupStatus.BOUND:
-            module_level = found.scope is not None and found.scope.kind is ScopeKind.MODULE
-            start = self._bindings(
-                facts,
-                list(found.bindings),
-                root.id if module_level else "",
-                frozenset(),
+        if found.status is LookupStatus.BOUND and found.scope is not None:
+            ambiguous = (
+                facts.is_ambiguous(root.id, len(found.bindings))
+                if found.scope.kind is ScopeKind.MODULE
+                else len(found.bindings) > 1 or root.id in found.scope.opaque
             )
+            start = self.resolve_bindings(facts, found.bindings, ambiguous=ambiguous)
         elif found.status is LookupStatus.UNKNOWN and facts.star_imports:
             start = self.via_star(facts, root.id)
         else:
@@ -377,29 +427,41 @@ class Resolver:
         results: list[Target] = []
         complete = True
         for target in start.targets:
-            deepest, done = self._descend(target, attrs)
-            results.append(deepest)
-            complete = complete and done
+            for deepest, done in self._descend(target, attrs):
+                if deepest not in results:
+                    results.append(deepest)
+                complete = complete and done
         return Chain(tuple(results), complete, found, Outcome.FOUND)
 
-    def _descend(self, start: Target, attrs: list[str]) -> tuple[Target, bool]:
-        current = start
+    def _step(self, current: Target, attr: str) -> tuple[Target, ...]:
+        """Every node ``current.attr`` may denote (empty: it does not resolve further)."""
+        if current.qualname is None:
+            resolved = self.member(current.module, attr)
+            if resolved.outcome is not Outcome.FOUND:
+                return ()
+            return tuple(current.then(t) for t in resolved.targets)
+        facts = self.facts.get(current.module)
+        draft = facts.symbols.get(current.qualname) if facts is not None else None
+        if draft is None or draft.kind is not SymbolKind.CLASS:
+            return ()
+        _found, members = self.class_member(current.module, current.qualname, attr)
+        return tuple(current.then(m) for m in members)
+
+    def _descend(self, start: Target, attrs: list[str]) -> list[tuple[Target, bool]]:
+        """Walk ``attrs`` from ``start`` along every candidate: ``(deepest node, complete)``."""
+        frontier = [start]
+        finished: list[tuple[Target, bool]] = []
         for attr in attrs:
-            if current.qualname is None:
-                resolved = self.member(current.module, attr)
-                if resolved.outcome is not Outcome.FOUND or not resolved.targets:
-                    return current, False
-                current = current.then(resolved.targets[0])
-                continue
-            facts = self.facts.get(current.module)
-            draft = facts.symbols.get(current.qualname) if facts is not None else None
-            if draft is None or draft.kind is not SymbolKind.CLASS:
-                return current, False
-            found, members = self.class_member(current.module, current.qualname, attr)
-            if not found or not members:
-                return current, False
-            current = current.then(members[0])
-        return current, True
+            following: list[Target] = []
+            for current in frontier:
+                nxt = self._step(current, attr)
+                if not nxt:
+                    finished.append((current, False))
+                following += [t for t in nxt if t not in following]
+            frontier = following
+            if not frontier:
+                return finished
+        return finished + [(t, True) for t in frontier]
 
     def name_match(self, name: str) -> tuple[NodeId, ...]:
         return self._methods.get(name, ())
@@ -423,6 +485,7 @@ class FileResolver:
                 Outcome.MISSING: UnresolvedReason.MISSING_MODULE,
                 Outcome.GETATTR: UnresolvedReason.MODULE_GETATTR,
                 Outcome.STAR_UNKNOWN: UnresolvedReason.STAR_IMPORT,
+                Outcome.UNRESOLVABLE: UnresolvedReason.UNKNOWN,
             }.get(outcome)
             if reason is not None:
                 facts.unresolved_at(check.node, check.source, reason, f"{check.base}.{check.name}")
@@ -538,6 +601,12 @@ class FileResolver:
             and qualified.rsplit(".", 1)[-1] in _LIST_MUTATORS
         ):
             self._record(call, source, UnresolvedReason.SYS_PATH_MUTATION)
+        elif (
+            qualified is not None
+            and qualified.startswith("sys.modules.")
+            and qualified.rsplit(".", 1)[-1] in _DICT_MUTATORS
+        ):
+            self._record(call, source, UnresolvedReason.DYNAMIC_IMPORT)  # module injection
         else:
             return False
         return True
@@ -678,6 +747,8 @@ class FileResolver:
                 self._record(target, source, UnresolvedReason.DYNAMIC_ATTRIBUTE)
             elif self.r.qualified(value, scope) == "sys.path":
                 self._record(target, source, UnresolvedReason.SYS_PATH_MUTATION)
+            elif self.r.qualified(value, scope) == "sys.modules":
+                self._record(target, source, UnresolvedReason.DYNAMIC_IMPORT)  # module injection
         elif isinstance(target, ast.Attribute):
             if self.r.qualified(target, scope) == "sys.path":
                 self._record(target, source, UnresolvedReason.SYS_PATH_MUTATION)
@@ -697,6 +768,12 @@ class FileResolver:
             self._record(call, source, UnresolvedReason.DYNAMIC_IMPORT)
             return
         name: str | None = name_arg.value
+        level = self._import_level(call)
+        if level is None:  # __import__(..., level=<non-literal>)
+            self._record(call, source, UnresolvedReason.DYNAMIC_IMPORT)
+            return
+        if name is not None and level:
+            name = "." * level + name
         if name is not None and name.startswith("."):
             name = self._relative_literal(call, name, scope)
         if name is None:
@@ -712,6 +789,18 @@ class FileResolver:
         else:
             facts.unresolved_at(call, source, UnresolvedReason.EXTERNAL_MODULE, name)
 
+    @staticmethod
+    def _import_level(call: ast.Call) -> int | None:
+        """``__import__``'s ``level`` (5th argument): 0 when absent, ``None`` if not literal."""
+        level_arg = call.args[4] if len(call.args) > 4 else None  # noqa: PLR2004  # 5th positional
+        if level_arg is None:
+            level_arg = next((k.value for k in call.keywords if k.arg == "level"), None)
+        if level_arg is None:
+            return 0
+        if isinstance(level_arg, ast.Constant) and type(level_arg.value) is int:
+            return max(level_arg.value, 0)
+        return None
+
     def _relative_literal(self, call: ast.Call, name: str, scope: Scope) -> str | None:
         """``import_module(".x", package=...)`` with a literal package or ``__package__``."""
         facts = self.facts
@@ -719,7 +808,11 @@ class FileResolver:
         if package_arg is None:
             package_arg = next((k.value for k in call.keywords if k.arg == "package"), None)
         package: str | None = None
-        if isinstance(package_arg, ast.Constant) and isinstance(package_arg.value, str):
+        if self.r.qualified(call.func, scope) == "builtins.__import__":
+            package_arg = None  # __import__ resolves ``level`` against the calling module
+            if facts.module is not None:
+                package = self.r.index.package_of(facts.module)
+        elif isinstance(package_arg, ast.Constant) and isinstance(package_arg.value, str):
             package = package_arg.value
         elif (
             isinstance(package_arg, ast.Name)

@@ -36,7 +36,8 @@ FUTURE_SYNTAX: tuple[FutureSyntax, ...] = (
     FutureSyntax(
         (3, 14),
         "PEP 750 template string",
-        re.compile(r"(?<![\w'\"])(?:[tT][rR]?|[rR][tT])['\"]"),
+        # Not after a word character, quote or backslash (``"a\t"`` is an escape).
+        re.compile(r"(?<![\w'\"\\])(?:[tT][rR]?|[rR][tT])['\"]"),
     ),
 )
 

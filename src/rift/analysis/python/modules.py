@@ -10,6 +10,7 @@ same-named ``.py`` (as CPython's path finder does), then path order. The loser i
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from rift.core.ids import is_dotted_module
 from rift.discovery.source_roots import REPO_ROOT, importable_name
 
 
@@ -35,8 +36,12 @@ class ModuleIndex:
         roots = sorted((r for r in source_roots if r != REPO_ROOT), key=lambda r: (-len(r), r))
         has_repo_root = REPO_ROOT in source_roots
         candidates: list[tuple[int, int, str, str]] = []  # (tier, not-package, path, name)
+        self._paths = frozenset(files)
+        self._fallback: set[str] = set()
         for path in sorted(files):
             rel, tier = _relative(path, roots, has_repo_root)
+            if tier:
+                self._fallback.add(path)
             name = importable_name(rel) if rel is not None else None
             if name is not None:
                 is_pkg = rel is not None and (rel == "__init__.py" or rel.endswith("/__init__.py"))
@@ -90,6 +95,19 @@ class ModuleIndex:
         parts = name.split(".")
         found = (".".join(parts[:i]) for i in range(1, len(parts)))
         return tuple(p for p in found if p in self._modules)
+
+    def is_fallback(self, path: str) -> bool:
+        """Named relative to the repository root because no source root contains it."""
+        return path in self._fallback
+
+    def pytest_base_package(self, path: str) -> str | None:
+        """Dotted name of the first ancestor directory of ``path`` without ``__init__.py``
+        (pytest's ``prepend`` rootdir), or ``None`` for the repository root / a bad name."""
+        parts = path.split("/")[:-1]
+        while parts and "/".join([*parts, "__init__.py"]) in self._paths:
+            parts.pop()
+        name = ".".join(parts)
+        return name if name and is_dotted_module(name) else None
 
     def names(self) -> tuple[str, ...]:
         return tuple(sorted(self._modules))
