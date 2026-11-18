@@ -35,7 +35,7 @@ def _release(text: str) -> tuple[int, int, int]:
 
 
 def test_declared_floors() -> None:
-    assert _floors() == {"jsonschema": "4.0.1", "rich": "14.2.0", "typer": "0.28"}
+    assert _floors() == {"jsonschema": "4.0.1", "rich": "13.8.0", "typer": "0.28"}
 
 
 def test_jsonschema_draft_2020_12_features_rift_relies_on() -> None:
@@ -82,3 +82,15 @@ def test_lowest_direct_job_really_installed_the_floors() -> None:
         assert locked is not None
         if name in {"rich", "jsonschema"}:  # these floors were loosened below the lockfile
             assert _release(floor) < _release(locked[1]), f"{name} floor is not older than lock"
+
+
+def test_lowest_direct_job_test_tool_pins_match_the_lockfile() -> None:
+    """The lowest-direct CI job installs test tools by exact version; keep them in sync."""
+    workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    pins = dict(re.findall(r'"([a-z][a-z0-9-]*)==([0-9][0-9.]*)"', workflow))
+    assert set(pins) == {"pytest", "pytest-cov", "hypothesis"}
+    lock = (REPO_ROOT / "uv.lock").read_text(encoding="utf-8")
+    for name, pinned in pins.items():
+        locked = re.search(rf'name = "{name}"\nversion = "([^"]+)"', lock)
+        assert locked is not None, name
+        assert pinned == locked[1], f"{name}: CI pins {pinned}, uv.lock has {locked[1]}"

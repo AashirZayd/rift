@@ -104,16 +104,22 @@ jobs:
           python-version: "3.11"
           enable-cache: true
 
-      - name: Install (lowest direct versions)
+      - name: Install (runtime deps at their floors, test tools only)
         # Re-resolves instead of using uv.lock; the rewritten lockfile is discarded with the runner.
-        run: uv sync --resolution lowest-direct
+        # --no-dev: the dev tool import-linter requires rich>=14.2, which would mask RIFT's own
+        # rich floor (13.8.0). The test tools are pinned to their uv.lock versions
+        # (tests/unit/test_dependency_floors.py keeps these pins in sync with the lockfile).
+        run: |
+          uv sync --resolution lowest-direct --no-dev
+          uv pip install "pytest==9.2.0" "pytest-cov==7.1.0" "hypothesis==6.170.15"
 
       - name: Show resolved runtime versions
         run: uv pip list | grep -E '^(typer|rich|jsonschema) '
 
       - name: Tests
         # --no-sync: a plain `uv run` would re-sync to uv.lock and undo the lowest resolution.
-        run: uv run --no-sync pytest
+        # The layering contract test needs import-linter (dev-only); it runs in every gate job.
+        run: uv run --no-sync pytest --ignore=tests/contract/test_layering.py
 
   git-minimum:
     # Proves the minimum supported git (ADR-0006): the whole suite against git 2.30.x.
