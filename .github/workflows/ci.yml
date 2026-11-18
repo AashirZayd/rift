@@ -74,3 +74,39 @@ jobs:
           echo "human: $human"; echo "json:  $json"
           test "$human" = "rift $expected"
           test "$json" = "{\"name\":\"rift\",\"version\":\"$expected\"}"
+
+  lowest-direct:
+    # Checks that the declared lower bounds of direct dependencies (rich, jsonschema, typer, …)
+    # actually work: resolve every direct dependency to its minimum allowed version.
+    name: tests (lowest-direct, ubuntu-latest, py3.11)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      HYPOTHESIS_PROFILE: ci
+      UV_PYTHON: "3.11"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.11.28"
+          python-version: "3.11"
+          enable-cache: true
+
+      - name: Install (lowest direct versions)
+        # Re-resolves instead of using uv.lock; the rewritten lockfile is discarded with the runner.
+        run: uv sync --resolution lowest-direct
+
+      - name: Show resolved runtime versions
+        run: uv pip list | grep -E '^(typer|rich|jsonschema) '
+
+      - name: Tests
+        # --no-sync: a plain `uv run` would re-sync to uv.lock and undo the lowest resolution.
+        run: uv run --no-sync pytest
