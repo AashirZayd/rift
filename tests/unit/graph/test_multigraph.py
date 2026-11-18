@@ -336,3 +336,10 @@ def test_edge_lookup_raises_for_unknown_endpoints(layered: DependencyGraph) -> N
     for source, target in (("zz", "a"), ("a", "zz")):
         with pytest.raises(GraphError):
             layered.edge(nid(source), IMPORTS, nid(target))
+
+
+def test_lexicographic_rank_carries_across_levels() -> None:
+    """Ties at depth 3 follow the depth-1 divergence, not the IDs at depth 2 (m3 < m4)."""
+    pairs = (("m0", "m1"), ("m0", "m2"), ("m1", "m4"), ("m2", "m3"), ("m4", "m5"), ("m3", "m5"))
+    graph = graph_of([f"m{i}" for i in range(6)], [edge(a, b) for a, b in pairs])
+    assert graph.forward_reachable(nid("m0")).path(nid("m5")) == ids("m0", "m1", "m4", "m5")

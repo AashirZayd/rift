@@ -236,6 +236,22 @@ WEAK_DIAMOND = Spec(  # the lexicographically smaller route has the weaker link
         edge("m2", "m3", confidence=Confidence.LIKELY),
     ),
 )
+# Paths diverge at depth 1 and tie again at depth 3; the level-2 node IDs sort the other way
+# (m3 < m4), so only a correct per-level lexicographic rank picks m0, m1, m4, m5.
+DEEP_TIE = Spec(
+    ("m0", "m1", "m2", "m3", "m4", "m5"),
+    tuple(
+        edge(a, b)
+        for a, b in (
+            ("m0", "m1"),
+            ("m0", "m2"),
+            ("m1", "m4"),
+            ("m2", "m3"),
+            ("m4", "m5"),
+            ("m3", "m5"),
+        )
+    ),
+)
 _COST_INDEX = {Confidence.UNKNOWN: 0, Confidence.POSSIBLE: 1, Confidence.LIKELY: 2}
 
 
@@ -303,6 +319,7 @@ def _check_paths(
 )
 @example(DIAMOND, None, Confidence.UNKNOWN, None, {0, 3})  # m3 via m1, m0 via m1 (smaller IDs)
 @example(WEAK_DIAMOND, None, Confidence.UNKNOWN, None, {0, 3})  # m3 via m2 (fewer weak links)
+@example(DEEP_TIE, None, Confidence.UNKNOWN, None, {0, 5})  # m5 via m1, m4 (lexicographic rank)
 def test_paths_are_the_strongest_then_smallest_shortest_paths(
     spec: Spec,
     kinds: frozenset[EdgeKind] | None,
