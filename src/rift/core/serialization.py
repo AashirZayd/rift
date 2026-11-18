@@ -17,7 +17,9 @@ from rift.core.clock import format_timestamp, parse_timestamp
 from rift.core.errors import ModelValidationError, SerializationError
 from rift.core.frozen import FrozenMap, freeze, thaw
 from rift.core.ids import EvidenceId, NodeId, SymbolId
+from rift.core.models.analysis import AnalysisResult
 from rift.core.models.change import ChangedFile, ChangeSet, ChangeStatus, LineRange
+from rift.core.models.diagnostic import Diagnostic, DiagnosticSeverity
 from rift.core.models.evidence import (
     Claim,
     ClaimKind,
@@ -273,6 +275,32 @@ def _encode_unresolved(m: UnresolvedReference) -> JsonDict:
         "raw": m.raw,
         "reason": m.reason.value,
         "location": _encode_source_location(m.location),
+    }
+
+
+def _encode_diagnostic(m: Diagnostic) -> JsonDict:
+    return {
+        "severity": m.severity.value,
+        "code": m.code,
+        "message": m.message,
+        "subject": m.subject,
+        "location": _location(m.location),
+    }
+
+
+def _encode_analysis(m: AnalysisResult) -> JsonDict:
+    return {
+        "file_path": m.file_path,
+        "module": m.module,
+        "content_sha256": m.content_sha256,
+        "analyzer_name": m.analyzer_name,
+        "analyzer_version": m.analyzer_version,
+        "python_version": m.python_version,
+        "symbols": [_encode_symbol(s) for s in m.symbols],
+        "edges": [_encode_edge(e) for e in m.edges],
+        "unresolved": [_encode_unresolved(u) for u in m.unresolved],
+        "diagnostics": [_encode_diagnostic(d) for d in m.diagnostics],
+        "limitations": [_encode_limitation(lim) for lim in m.limitations],
     }
 
 
@@ -608,6 +636,32 @@ def _decode_unresolved(r: _Reader) -> UnresolvedReference:
     )
 
 
+def _decode_diagnostic(r: _Reader) -> Diagnostic:
+    return Diagnostic(
+        severity=r.enum("severity", DiagnosticSeverity),
+        code=r.text("code"),
+        message=r.text("message"),
+        subject=r.opt_text("subject"),
+        location=r.opt_model("location", SourceLocation),
+    )
+
+
+def _decode_analysis(r: _Reader) -> AnalysisResult:
+    return AnalysisResult(
+        file_path=r.text("file_path"),
+        module=r.opt_text("module"),
+        content_sha256=r.text("content_sha256"),
+        analyzer_name=r.text("analyzer_name"),
+        analyzer_version=r.text("analyzer_version"),
+        python_version=r.text("python_version"),
+        symbols=r.models("symbols", Symbol),
+        edges=r.models("edges", Edge),
+        unresolved=r.models("unresolved", UnresolvedReference),
+        diagnostics=r.models("diagnostics", Diagnostic),
+        limitations=r.models("limitations", Limitation),
+    )
+
+
 def _decode_explanation(r: _Reader) -> ImpactExplanation:
     return ImpactExplanation(node=NodeId(r.text("node")), path=_node_ids(r, "path"))
 
@@ -830,6 +884,8 @@ _CODECS: Mapping[type[Any], tuple[Callable[[Any], JsonDict], Callable[[_Reader],
             Node: (_encode_node, _decode_node),
             Edge: (_encode_edge, _decode_edge),
             UnresolvedReference: (_encode_unresolved, _decode_unresolved),
+            Diagnostic: (_encode_diagnostic, _decode_diagnostic),
+            AnalysisResult: (_encode_analysis, _decode_analysis),
             ImpactExplanation: (_encode_explanation, _decode_explanation),
             ImpactResult: (_encode_impact, _decode_impact),
             PlannedCheck: (_encode_planned_check, _decode_planned_check),
