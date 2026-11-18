@@ -90,7 +90,7 @@ known-first-party = ["rift"]
 # ---------------------------------------------------------------- mypy
 [tool.mypy]
 python_version = "3.11"
-files = ["src", "tests"]
+files = ["src", "tests", "benchmarks"]
 mypy_path = "src"
 strict = true
 warn_unreachable = true
