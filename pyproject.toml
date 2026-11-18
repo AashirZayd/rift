@@ -131,7 +131,7 @@ branch = true
 
 [tool.coverage.report]
 show_missing = true
-# fail_under is enforced from M1 onward (SPEC §22). M0 reports coverage only.
+fail_under = 85  # SPEC §22: enforced from M1 onward; never lowered to make a run pass
 
 # ---------------------------------------------------------------- import-linter (SPEC §4.1)
 [tool.importlinter]
