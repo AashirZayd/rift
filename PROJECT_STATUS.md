@@ -1,8 +1,8 @@
 # Project Status
-_Last updated: 2026-11-18 — by: Claude Code session (M0 build)_
+_Last updated: 2026-11-18 — by: Claude Code session (M1 start)_
 
 ## Current milestone
-M0 — Foundation — awaiting review
+M1 — Core models & Git — in progress (M0 accepted by user 2026-11-18; CI green, PR #1 merged)
 
 ## Completed (verified)
 - `uv sync` from a clean checkout; `uv.lock` committed — verified by `uv sync --locked` in a fresh `git clone` (exit 0; 76 tests pass there)
@@ -18,7 +18,7 @@ M0 — Foundation — awaiting review
 - Ruff, mypy strict, pytest configured and green — verified by the §23 gate: format 54 files clean, ruff clean, mypy 0 issues in 37 files, 77 passed + 1 xfailed (strict, listed below), branch coverage 97%
 
 ## Pending
-- User review of M0 (pending CI run on GitHub).
+- M1 implementation (see design note in session).
 
 ## Release blockers (v0.1.0)
 - Revisit typer cap before v0.1.0 — accept transitive pydantic or keep cap + document isolated install (uv tool / pipx).
