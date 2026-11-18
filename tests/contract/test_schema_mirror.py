@@ -1,4 +1,4 @@
-"""Schema mirror contract (ADR-0003): ``specs/`` is a byte-identical mirror of ``rift.core.schemas``.
+"""Schema mirror contract (ADR-0003): ``specs/`` byte-identically mirrors ``rift.core.schemas``.
 
 The canonical schemas ship inside the package (``src/rift/core/schemas/``); ``specs/`` exists for
 readers and external tooling. These tests make drift between the two copies impossible.

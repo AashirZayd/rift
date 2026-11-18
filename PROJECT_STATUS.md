@@ -15,7 +15,7 @@ M0 — Foundation — awaiting review
 - Every §4 subpackage exists, imports, has a responsibility docstring, holds no logic — verified by `tests/unit/test_packages.py`
 - Layering (§4.1) encoded in 8 import-linter contracts: top-level layers (exhaustive), no cycles anywhere, core/plugins.api/proof/cli forbidden rules, plugins-internal layering, renderers only in cli — verified by `uv run lint-imports` (8 kept, 0 broken), by planted-violation tests in `tests/contract/test_layering.py` (14 cases, each must report the expected contract BROKEN), and by drift tests tying forbidden lists to the real subpackage set
 - Schema mirror cannot drift: `specs/` vs `rift.core.schemas` byte-identical — verified by `tests/contract/test_schema_mirror.py::test_mirror_has_no_drift` (probed: a drifted copy fails it)
-- Ruff, mypy strict, pytest configured and green — verified by the §23 gate: format 53 files clean, ruff clean, mypy 0 issues in 36 files, 76 passed, branch coverage 97%
+- Ruff, mypy strict, pytest configured and green — verified by the §23 gate: format 54 files clean, ruff clean, mypy 0 issues in 37 files, 77 passed + 1 xfailed (strict, listed below), branch coverage 97%
 
 ## Pending
 - User review of M0 (pending CI run on GitHub).
