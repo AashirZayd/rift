@@ -7,6 +7,11 @@ separately (see `docs/SPEC.md` §16).
 
 ## [Unreleased]
 
+### Fixed
+- Analyzer: calls through a local, parameter or assigned name (`cb = f; cb()`), a subscript or a
+  call result are recorded as `unknown` unresolved references instead of being dropped
+  (ADR-0007 item 9a).
+
 ### Changed
 - Runtime dependency floors: `jsonschema>=4.0.1` (4.0.0 is yanked), `rich>=13.8.0`
   (ADR-0003 amendment).

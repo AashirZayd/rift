@@ -181,6 +181,21 @@ The review found these problems in the first implementation. Each is fixed and h
       `relative_import_without_package`.
     - The t-string heuristic ignores `\t` escapes.
 
+### Amendment after M2 acceptance: unresolvable callees (branch `m2/unresolved-calls`)
+
+9a. Item 9 covers attribute calls only. A call whose callee is neither a project symbol, a
+    builtin, an external name nor an attribute call is recorded as
+    `UnresolvedReference(reason=unknown)` from the calling node, with the callee text in `raw`:
+    - a bare name bound to a local, parameter or plain assignment (`cb = f; cb()` → raw `cb`),
+      or imported from a project module where it is not a function or class;
+    - a subscript (`handlers[k]()` → raw `handlers[k]`);
+    - the result of a call (`make()()` → raw `make()`).
+
+    A directly called lambda literal (`(lambda: 1)()`) is not recorded: its body is analyzed in
+    the enclosing scope (item on lambdas above). Before this amendment these calls were dropped
+    silently, contradicting SPEC §2.3 and §9.3 ("otherwise unresolved"). Pinned by
+    `tests/unit/analysis/test_unresolved_calls.py` and `test_extraction.py::test_scoping_rules`.
+
 ## Alternatives considered
 
 - **New `UnresolvedReason` values** (`monkeypatch`, `namespace_write`): clearer, but changes the
@@ -206,6 +221,10 @@ The decisions are pinned by:
 
 Known limitations:
 - Lambdas and comprehensions share the enclosing scope (over-approximated locals).
-- A call through a variable bound to a function (`cb = f; cb()`) is not resolved.
+- A call through a variable bound to a function (`cb = f; cb()`) is not resolved to `f`; it is
+  recorded as `unknown` (item 9a).
+- `obj.attr = f; obj.attr()` falls under item 9: if no project method is named `attr`, the
+  call is not recorded. A call on a missing member of a project module (`pkg.mod.gone()`)
+  keeps only the `references` edge to the module.
 - `.pyi` stubs are ignored.
 - Results depend on the interpreter's grammar (recorded in `python_version`).
