@@ -8,11 +8,10 @@ exactly the key the model checks.
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from itertools import pairwise
 from typing import Any, TypeVar
 
 from rift.core.ids import NodeId, file_node_id, module_node_id
-from rift.core.models._checks import check_types, is_hex, non_empty, require
+from rift.core.models._checks import check_types, is_hex, non_empty, require, strictly_sorted
 from rift.core.models.diagnostic import Diagnostic
 from rift.core.models.evidence import Limitation
 from rift.core.models.graph import Edge, UnresolvedReference
@@ -86,14 +85,6 @@ def sort_unique(values: Sequence[T], key: Callable[[T], Any]) -> tuple[T, ...]:
     return tuple(result)
 
 
-def _sorted_strictly(values: Sequence[T], key: Callable[[T], Any], field: str) -> None:
-    keys = [key(value) for value in values]
-    require(
-        all(a < b for a, b in pairwise(keys)),
-        f"{field} must be sorted by its documented key and free of duplicates",
-    )
-
-
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AnalysisResult:
     """Static facts about one file. ``module`` is ``None`` when the file has no importable
@@ -123,11 +114,11 @@ class AnalysisResult:
             bool(_PYTHON_VERSION.match(self.python_version)),
             "python_version must be major.minor",
         )
-        _sorted_strictly(self.symbols, symbol_sort_key, "symbols")
-        _sorted_strictly(self.edges, edge_sort_key, "edges")
-        _sorted_strictly(self.unresolved, unresolved_sort_key, "unresolved")
-        _sorted_strictly(self.diagnostics, diagnostic_sort_key, "diagnostics")
-        _sorted_strictly(self.limitations, limitation_sort_key, "limitations")
+        strictly_sorted(self.symbols, symbol_sort_key, "symbols")
+        strictly_sorted(self.edges, edge_sort_key, "edges")
+        strictly_sorted(self.unresolved, unresolved_sort_key, "unresolved")
+        strictly_sorted(self.diagnostics, diagnostic_sort_key, "diagnostics")
+        strictly_sorted(self.limitations, limitation_sort_key, "limitations")
         own: set[NodeId] = {file_node_id(self.file_path)}
         if self.module is None:
             require(not self.symbols, "a file without a module name has no symbols")

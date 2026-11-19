@@ -216,6 +216,21 @@ class DependencyGraph:
             self._in, starts, kinds=kinds, min_confidence=min_confidence, max_depth=max_depth
         )
 
+    def copy(self) -> "DependencyGraph":
+        """An independent copy (nodes and edges are immutable, so they are shared)."""
+        result = DependencyGraph()
+        result._nodes = dict(self._nodes)
+        for mine, theirs in ((self._out, result._out), (self._in, result._in)):
+            for node, by_kind in mine.items():
+                theirs[node] = {
+                    kind: {
+                        neighbour: dict(parallel) for neighbour, parallel in by_neighbour.items()
+                    }
+                    for kind, by_neighbour in by_kind.items()
+                }
+        result._edge_count = self._edge_count
+        return result
+
     def subgraph(self, node_ids: Iterable[NodeId]) -> "DependencyGraph":
         """The induced subgraph: the given nodes and every edge between two of them."""
         keep = sorted(set(node_ids))

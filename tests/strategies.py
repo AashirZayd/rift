@@ -55,7 +55,13 @@ from rift.core.models.graph import (
     UnresolvedReason,
     UnresolvedReference,
 )
-from rift.core.models.impact import Completeness, ImpactClass, ImpactExplanation, ImpactResult
+from rift.core.models.impact import (
+    INFORMATIONAL_LIMITATION_KINDS,
+    Completeness,
+    ImpactClass,
+    ImpactExplanation,
+    ImpactResult,
+)
 from rift.core.models.plugin import PluginKind, PluginMetadata
 from rift.core.models.policy import (
     Invariant,
@@ -392,19 +398,45 @@ def sorted_node_ids(max_size: int = SMALL) -> st.SearchStrategy[tuple[NodeId, ..
     return st.lists(node_id, max_size=max_size, unique=True).map(lambda v: tuple(sorted(v)))
 
 
-impact_result = st.builds(
-    ImpactResult,
-    changed_nodes=sorted_node_ids(),
-    affected_nodes=sorted_node_ids(),
-    public_interfaces=sorted_node_ids(),
-    related_tests=st.lists(test_id, max_size=SMALL, unique=True).map(lambda v: tuple(sorted(v))),
-    unresolved=st.lists(unresolved, max_size=2).map(tuple),
-    classification=st.sampled_from(ImpactClass),
-    completeness=st.sampled_from(Completeness),
-    explanations=st.lists(explanation(), max_size=SMALL, unique_by=lambda e: e.node).map(
-        lambda v: tuple(sorted(v, key=lambda e: e.node))
-    ),
-)
+@st.composite
+def impact_result(draw: Any) -> ImpactResult:
+    changed = draw(sorted_node_ids())
+    tests = draw(st.lists(test_id, max_size=SMALL, unique=True)) if changed else []
+    pool = set(draw(sorted_node_ids())) if changed else set()
+    affected = tuple(sorted((pool | set(tests)) - set(changed)))
+    related = tuple(sorted({*tests, *(n for n in changed if n.startswith("test:"))}))
+    impact_set = sorted({*changed, *affected})
+    public = tuple(
+        sorted(draw(st.sets(st.sampled_from(impact_set)) if impact_set else st.just(set())))
+    )
+    explanations = []
+    for target in sorted({*affected, *related}):
+        start = draw(st.sampled_from(changed))
+        middle = draw(st.lists(node_id, max_size=2))
+        path = (start,) if target == start else (start, *middle, target)
+        explanations.append(ImpactExplanation(node=target, path=path))
+    completeness = draw(st.sampled_from(Completeness))
+    reasons = limitation.filter(lambda lim: lim.kind not in INFORMATIONAL_LIMITATION_KINDS)
+    limitations = (
+        ()
+        if completeness is Completeness.COMPLETE
+        else _unique_by_key(
+            draw(st.lists(reasons, min_size=1, max_size=SMALL)), limitation_sort_key
+        )
+    )
+    tiers = [c for c in ImpactClass if (c is ImpactClass.NONE) == (not changed)]
+    return ImpactResult(
+        changed_nodes=changed,
+        affected_nodes=affected,
+        public_interfaces=public,
+        related_tests=related,
+        unresolved=_unique_by_key(draw(st.lists(unresolved, max_size=2)), unresolved_sort_key),
+        classification=draw(st.sampled_from(tiers)),
+        completeness=completeness,
+        limitations=limitations,
+        explanations=tuple(explanations),
+    )
+
 
 # --------------------------------------------------------------------------- verification
 
@@ -616,7 +648,7 @@ MODEL_STRATEGIES: dict[type[Any], st.SearchStrategy[Any]] = {
     Diagnostic: diagnostic(),
     AnalysisResult: analysis_result(),
     ImpactExplanation: explanation(),
-    ImpactResult: impact_result,
+    ImpactResult: impact_result(),
     PlannedCheck: planned_check,
     ExclusionRecord: exclusion,
     VerificationPlan: verification_plan(),

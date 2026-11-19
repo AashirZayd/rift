@@ -1,7 +1,8 @@
 """Shared invariant checks for model ``__post_init__`` methods (internal)."""
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import fields
+from itertools import pairwise
 from types import UnionType
 from typing import Any, Union, cast, get_args, get_origin
 
@@ -27,6 +28,15 @@ def non_negative(value: int, field: str) -> None:
 def sorted_unique(values: Sequence[str], field: str) -> None:
     """Determinism (SPEC §7.2): ID collections are stored sorted and without duplicates."""
     require(list(values) == sorted(set(values)), f"{field} must be sorted and free of duplicates")
+
+
+def strictly_sorted(values: Sequence[Any], key: Callable[[Any], Any], field: str) -> None:
+    """Model collections are stored sorted by a documented key, without duplicate keys."""
+    keys = [key(value) for value in values]
+    require(
+        all(a < b for a, b in pairwise(keys)),
+        f"{field} must be sorted by its documented key and free of duplicates",
+    )
 
 
 def is_hex(value: str, lengths: tuple[int, ...]) -> bool:

@@ -215,7 +215,7 @@ Minimum fields below; implementers may add fields, never remove these without an
 - `test:<pytest-node-id>` → `test:tests/test_auth.py::TestLogin::test_ok`
 
 ### 6.4 Impact / verification / evidence / policy / proof
-- `ImpactResult(changed_nodes, affected_nodes, public_interfaces, related_tests, unresolved, classification: ImpactClass, completeness: Completeness, explanations)`
+- `ImpactResult(changed_nodes, affected_nodes, public_interfaces, related_tests, unresolved, classification: ImpactClass, completeness: Completeness, limitations: tuple[Limitation, ...], explanations)` — `limitations` lists every reason the result is not complete (`partial`/`unknown` always has at least one), plus informational entries of documented kinds that do not affect completeness (a `complete` result carries only those)
 - `Completeness`: `complete | partial | unknown`
 - `VerificationPlan(mode: PlanMode, selected: tuple[PlannedCheck, ...], excluded: tuple[ExclusionRecord, ...], full_suite_recommended: bool, reasons: tuple[str, ...])`
 - `PlanMode`: `selective | full_suite`
@@ -700,3 +700,15 @@ When a requirement cannot be met: stop, report the blocker with evidence, propos
 - Whether cache lands in M2 or M5 (M2 design note).
 - Windows process-group kill semantics for timeouts (M5).
 - Hostname/user inclusion in environment block — default off (M6).
+
+## 31. ROADMAP (planned, not implemented)
+
+Planned additions. They are not part of any milestone's acceptance criteria until the
+milestone starts, and none of them exists yet.
+
+- **M7**: `rift proof export --format html`. A single, self-contained, offline HTML report of a
+  Change Proof: verdict, changes, impact, tests, evidence, limitations. No server, no external
+  assets, no JavaScript from a CDN.
+- **M8**: a GitHub Action that posts a proof summary as a pull-request comment.
+- **Post-v0.1**: a web dashboard that reads proof JSON, as a separate project. It is not part of
+  this repository.

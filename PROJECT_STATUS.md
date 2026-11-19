@@ -1,8 +1,8 @@
 # Project Status
-_Last updated: 2026-11-19 — by: Claude Code session (M3 review decisions)_
+_Last updated: 2026-11-19 — by: Claude Code session (M4 user decisions, their review, gate)_
 
 ## Current milestone
-M3 review decisions — complete, awaiting review on `m3/review-decisions`. M3 accepted by user 2026-11-19. Note: at the start of this session `origin/main` was still `f3a327f` (PR #4 `m2/unresolved-calls` open, no PR for `m3/graph`), so this branch is stacked on `origin/m3/graph` (`312a38f`). M4 not started; it waits for "review decisions merged".
+M4 — Impact — complete, awaiting review on `m4/impact` (not pushed) (from `main` at `c192750`, which contains PR #4, #5 `m3/graph` and #6 `m3/review-decisions`; user: CI green). M3 and the review decisions accepted by user 2026-11-19.
 
 ## Completed (verified)
 ### M0 (accepted)
@@ -36,7 +36,24 @@ M3 review decisions — complete, awaiting review on `m3/review-decisions`. M3 a
 - §23 gate after review fixes: sync OK, format 130 files clean, ruff 0, mypy 0 issues in 108 files, lint-imports 8 kept / 0 broken, pytest 559 passed / 7 skipped / 1 xfailed, coverage 94.92% (fail_under 85), build OK
 - Post-acceptance fix (branch `m2/unresolved-calls`, ADR-0007 item 9a): calls through a local/parameter/assigned name (`cb = f; cb()`), a subscript or a call result were silently dropped; now `UnresolvedReference(reason=unknown)`; calling a module object likewise (plus a `references` edge to the module, found by the M3 review) — verified by `tests/unit/analysis/test_unresolved_calls.py`; gate on that branch: 571 passed / 7 skipped / 1 xfailed, coverage 95.00% (before the module-object follow-up, which is covered by the M3 gate)
 
-### M3 review decisions (awaiting review, `m3/review-decisions`)
+### M4 (awaiting review)
+- Analyzed file set = git (tracked + untracked-not-ignored) ∩ discovery, in `rift.services.analysis`; a `.gitignore`d venv (without `pyvenv.cfg`) and build output are never analyzed; force-added, deleted-tracked and nested-repo cases — verified by `tests/integration/services/test_analyzed_file_set.py` (real git, with a positive control)
+- §11 step 1 mapping: own-line intersection (class minus members), module node always changed and a traversal start only for module-level edits / added / renamed / type-changed / binary / removed symbols; removed symbols from an in-memory parse of the base side (`git.read_files_at` + `analysis.analyze_sources`); renamed under the new path; rename-out = deletion; deleted = file node only + `deleted_without_analysis`; exclusions on deleted paths; `.pyi` → `stub_not_analyzed` — verified by `tests/integration/services/test_impact.py` (add, modify, delete, rename, whitespace inside and between symbols, removed public function), `tests/unit/impact/test_review_regressions.py`, `tests/unit/impact/test_engine_details.py`
+- §11.1 classification by module-crossing dependencies inside the impact set, ordinal and monotone in the change set; one test per tier plus each neighbouring boundary; publicity via `__all__`/visibility and module path; default public packages under the source roots; test code (test files, conftest.py, tests/ and test/ dirs) excluded; no probability language (word-bounded scan with positive control) — verified by `tests/unit/impact/test_classification.py`, the monotonicity property in `test_review_regressions.py` (`HYPOTHESIS_PROFILE=ci`: passed)
+- Completeness orthogonal to the tier; every reason listed in `ImpactResult.limitations` (unresolved references touching the impact set, per reason with counts; analysis failures and skips anywhere; other analyzer limitations inside the impact set; deleted without analysis; stubs) — verified by `tests/unit/impact/test_completeness_and_tests.py`, `tests/unit/core/test_impact_model.py` (model invariants, incl. the review #16 ones)
+- related_tests = `test:` nodes in the impact set with explanation paths, honouring min_confidence and max_depth; tests of deleted/renamed modules reached through failed module-level imports — verified by `test_completeness_and_tests.py::test_related_tests_honour_min_confidence_with_paths`, `test_impact.py::test_deleted_module_is_a_file_node_only_and_partial`
+- `--symbol` resolution as a service (`services.impact.resolve_symbol`): full name > qualname > short name; ambiguous → all candidates sorted; not found → `SymbolNotFoundError(symbol_not_found)` with hint — verified by `tests/unit/impact/test_lookup.py`, `test_impact.py::test_symbol_and_path_services`
+- End to end with real git → exact tier, completeness, affected nodes, related tests and paths — verified by `test_impact.py::test_end_to_end_private_change_crossing_packages`; determinism under PYTHONHASHSEED 0 vs 4242 on a copy at another path — verified by `tests/contract/test_determinism.py::test_impact_results_are_byte_identical_across_hash_seeds`
+- Fresh-context review: 23 findings (2 blockers, 7 major, 10 minor, 4 nits); all fixed with tests except #9 (decision requested) — verified by `tests/unit/impact/test_review_regressions.py` (24 tests) and the updated suites
+- User decisions on M4 (2026-11-19), applied on `m4/impact`:
+  - `external_module` references stay in `unresolved` but do not affect completeness; guard: an import counts when its top-level name is the project's own (head or base side) or it names a changed/removed module (also by pytest short name) — verified by `tests/unit/impact/test_user_decisions.py` (stdlib, third-party, broken internal import, guard) and `tests/integration/services/test_impact_deletions.py::test_deleting_a_still_imported_top_level_module_is_partial_and_public_api`
+  - deleted files use the base-side parse (module node + symbols; a deleted public symbol or public module path is public API); partial only if the base side cannot be parsed — verified by `test_impact.py::test_deleted_module_maps_to_its_base_side_nodes`, `test_deleted_file_whose_base_side_does_not_parse_falls_back`, `test_impact_deletions.py` (re-export shim, `__init__.py`, oversized base blob, rename out, pytest-prepend helper, deleted test file)
+  - project-wide non-literal dynamic imports add one sorted informational `dynamic_code_in_project` entry naming the files, without affecting completeness; model: `complete` carries informational limitations only, `partial`/`unknown` needs a real reason — verified by `test_user_decisions.py::test_project_wide_dynamic_imports_add_one_informational_entry`, `tests/unit/core/test_impact_model.py`
+  - M5 and M7 checklist items recorded; SPEC §31 and README roadmap (planned only)
+- Fresh-context review of the decision changes: 11 findings (4 major, 4 minor, 3 nits); majors and minors fixed with real-git tests (control: the four major-finding tests fail on the pre-fix code); nits #10/#11 recorded as known limitations in ADR-0010
+- §23 gate after the decisions and their review fixes: sync OK, format 173 files clean, ruff 0, mypy 0 issues in 148 files, lint-imports 8 kept / 0 broken, pytest 798 passed / 7 skipped / 1 xfailed, coverage 95.66% (fail_under 85), build OK; `HYPOTHESIS_PROFILE=ci` properties + review regressions: 104 passed
+
+### M3 review decisions (accepted 2026-11-19, PR #6)
 - Decision 1, restricting flags in the edge key: a `certain` TYPE_CHECKING import and a `likely` runtime import are both kept; traversal explains a hop with the strongest parallel edge (ties: smaller kind, then less restricted); SPEC §10 line, ADR-0009 §1/§6/§7/§10 — verified by `tests/unit/graph/test_merge.py` (`test_type_checking_and_runtime_edges_are_both_kept`, `test_traversal_explains_with_the_strongest_parallel_edge`), `tests/unit/graph/test_builder.py::test_type_checking_and_dynamic_runtime_imports_are_parallel_edges`, and the batch-rule and brute-force path properties in `tests/property/test_graph_properties.py`
 - Decision 2, `NodeKind.constant`: module-level constants are `py:<module>:<NAME>` constant nodes reached by `references` edges from their users; SPEC §6.3, ADR-0009 §13, ADR-0005, CHANGELOG (pre-protocol vocabulary change) — verified by `tests/unit/graph/test_builder.py::test_constants_are_nodes_referenced_by_their_users`, `tests/property/test_model_roundtrip.py` (strategy covers the new kind)
 - Decision 3, `cls()` in classmethods (incl. implicit `__init_subclass__`/`__class_getitem__`) and `type(self)()` in instance methods → `calls` edge to the defining class at `likely`; rebound receiver, `self()`, `type(cls)()`, staticmethod/plain-function parameters and shadowed `type` stay `unknown`; ADR-0007 item 9b — verified by `tests/unit/analysis/test_receiver_class_calls.py`
@@ -54,22 +71,31 @@ M3 review decisions — complete, awaiting review on `m3/review-decisions`. M3 a
 - Fresh-context review: 12 findings (1 major, 5 minor, 6 nit groups). Fixed: #1 merge inflation, #2 dangling collapse, #3 phantom nested test IDs, #4 filter validation, #5 strength-aware paths, #6b module-object calls, #7 folded self-loops, #8 doc paths, #9 from_dict wording, #10 pytest benchmark, #11 weak tests, #12 `Step` kw_only / `edge()` raising. Not changed: #6a `cls()`/`type(self)()` noise (SPEC-correct; noted in ADR-0007 9a for a decision), #12 `GraphBuild` unhashable (documented)
 
 ## Pending
-- User review and merge of `m3/review-decisions` (and of PR #4 `m2/unresolved-calls` / `m3/graph`, which `origin/main` did not contain at the start of this session).
+- User review of M4 (including the applied decisions).
 
 ## Release blockers (v0.1.0)
 - Revisit typer cap before v0.1.0 — accept transitive pydantic or keep cap + document isolated install (uv tool / pipx).
 
-## M4 checklist
-(Recorded only; not implemented before M4.)
-- The analyzed file set comes from git (tracked + untracked-not-ignored) intersected with discovery, assembled in the services layer, so .gitignored dirs such as venv/ and build output are never analyzed. Ties into the core.excludesFile ADR on the M6 checklist.
+## M5 checklist
+(Recorded only; not implemented before M5.)
+- Prefix heuristic: an f-string or concatenation import whose literal prefix matches a changed module's package makes the result partial and triggers full-suite.
 
 ## M6 checklist
 (Recorded only; not implemented before M6.)
-- Enforce sorted collections in the models (deferred M1 review item): require sorted order (or document the key) for `ImpactResult.unresolved`, `ChangeProof.limitations`, `Evidence.limitations`, `ProofVerification.runs`, `VerificationPlan.reasons` (§7.2).
+- Enforce sorted collections in the models (deferred M1 review item): require sorted order (or document the key) for `ChangeProof.limitations`, `Evidence.limitations`, `ProofVerification.runs`, `VerificationPlan.reasons` (§7.2).
 - Submodule edits are not detected (ADR-0006): this must appear in the proof's `limitations` whenever submodules are present, never silently.
-- `core.excludesFile` makes untracked-file detection machine-dependent (a §7 risk). Decide with an ADR: ignore global excludes, or record a hash of them in the environment block.
+- `core.excludesFile` makes untracked-file detection and the analyzed file set (ADR-0010 §1) machine-dependent (a §7 risk). Decide with an ADR: ignore global excludes, or record a hash of them in the environment block.
 - jsonschema floor 4.0.1: if M6 needs cross-file `$ref` via the `referencing` API (4.18+), raise the floor in an ADR (amend ADR-0003) rather than keeping two code paths.
 - Accept and preserve `x-` extension keys in decoding (§16).
+
+## M7 checklist
+(Recorded only; not implemented before M7.)
+- --base/--head comparing two commits that aren't checked out must fail with a structured error (or be supported); never return a result computed from the working tree.
+- `rift proof export --format html`: a single self-contained offline HTML report (verdict, changes, impact, tests, evidence, limitations); no server, no external assets, no CDN JS (SPEC §31, planned).
+
+## M8 checklist
+(Recorded only; not implemented before M8.)
+- A GitHub Action that posts a proof summary as a PR comment (SPEC §31, planned).
 
 ## M9 checklist
 - Fill CoC contact (`CODE_OF_CONDUCT.md` reporting placeholder).
@@ -89,6 +115,7 @@ M3 review decisions — complete, awaiting review on `m3/review-decisions`. M3 a
 - Discovery does not honour `.gitignore` (deterministic, independent of global excludes); exclusion config wiring is M7 (ADR-0008).
 - Read containment: check-then-open race narrowed by `(st_dev, st_ino)` comparison; residual on filesystems with unreliable inode numbers (ADR-0008).
 - Edges carry no evidence IDs until the evidence engine (M6).
+- Impact (ADR-0010): a deleted file whose base side cannot be parsed is file-node-only (a public module path counts as public API); unresolved references outside the impact set (e.g. `import_module(name)` elsewhere) can hide a dependent — reported by the informational `dynamic_code_in_project` entry, M5 prefix heuristic pending; test code recognised by path conventions only; head must be the working tree; the base-side snapshot holds only the changed files (a shadowed base-side loser is named as the winner, conservatively); the `dynamic_code_in_project` message is unbounded.
 - Graph (ADR-0009): no `tests`/containment edges (M4/M5); test IDs carry no parametrization; the graph is mutable during construction and read-only by convention only; the static recursion guard detects direct recursion only.
 
 ## Failing / xfail tests
@@ -98,8 +125,8 @@ M3 review decisions — complete, awaiting review on `m3/review-decisions`. M3 a
 - None. Nothing from M4+ implemented (no impact classification, no test selection; no SQLite cache — deferred to M5 by ADR-0007 §29).
 
 ## Unverified
-- CI on GitHub for `m2/unresolved-calls` and `m3/graph` (not pushed). Only Windows + Python 3.11.9 was run locally.
-- M2: none — user reports CI green on GitHub for PR #3.
+- CI on GitHub for `m4/impact` (not pushed). Only Windows + Python 3.11.9 was run locally.
+- M2, M3: none — user reports CI green on GitHub for PRs #3–#6.
 - M1: none — user reports CI green on GitHub for PR #2, including `git-minimum` (git 2.30.2, which runs `tests/security/test_git_hardening.py::test_partial_clone_never_fetches_or_runs_transport_commands`) and `lowest-direct`.
 
 ## Architectural decisions (ADR index)
@@ -112,6 +139,8 @@ M3 review decisions — complete, awaiting review on `m3/review-decisions`. M3 a
 - [ADR-0007](docs/adr/0007-python-analyzer-model-and-resolution.md) — AnalysisResult/Diagnostic, edge sources and confidence tiers, §9.4 reason mapping, input handling, cache deferred to M5; review amendment (memoized bounded resolution, rebinding, static builtins)
 - [ADR-0008](docs/adr/0008-discovery-and-source-roots.md) — Link-safe discovery, exclusions, source-root autodetection, read containment, pytest-style sibling imports
 - [ADR-0009](docs/adr/0009-dependency-graph.md) — Graph storage, edge key incl. restricting flags (parallel edges), iterative BFS with strongest-then-smallest shortest explanation paths, builder (collectable test nodes, constant nodes, dangling edges → unresolved)
+- [ADR-0010](docs/adr/0010-impact-engine.md) — Analyzed file set (git ∩ discovery), working-tree head, change mapping and module anchors, ordinal classification ladder (dependents outside own modules, test code excluded), completeness reasons in `ImpactResult.limitations`, `--symbol` tiers
 
 ## Next tasks
-- Await "review decisions merged", then `/milestone M4` (§11). Not started.
+- Await "M4 accepted".
+- M5 — Verification (§12; §24 M5): not started.

@@ -11,7 +11,7 @@ from rift.core.ids import NodeId
 from rift.core.models.graph import Confidence, EdgeKind, Node, NodeKind
 from rift.graph.errors import GraphError
 from rift.graph.multigraph import DependencyGraph
-from tests.unit.graph.helpers import edge, graph_of, nid
+from tests.unit.graph.helpers import edge, graph_of, nid, node
 
 CALLS = EdgeKind.CALLS
 IMPORTS = EdgeKind.IMPORTS
@@ -343,3 +343,14 @@ def test_lexicographic_rank_carries_across_levels() -> None:
     pairs = (("m0", "m1"), ("m0", "m2"), ("m1", "m4"), ("m2", "m3"), ("m4", "m5"), ("m3", "m5"))
     graph = graph_of([f"m{i}" for i in range(6)], [edge(a, b) for a, b in pairs])
     assert graph.forward_reachable(nid("m0")).path(nid("m5")) == ids("m0", "m1", "m4", "m5")
+
+
+def test_copy_is_equal_and_independent(layered: DependencyGraph) -> None:
+    duplicate = layered.copy()
+    assert duplicate == layered
+    assert duplicate.to_dict() == layered.to_dict()
+    duplicate.add_node(node("extra"))
+    duplicate.add_edge(edge("extra", "a"))
+    assert not layered.has_node(nid("extra"))
+    assert layered.predecessors(nid("a")) != duplicate.predecessors(nid("a"))
+    assert duplicate.edge_count == layered.edge_count + 1

@@ -7,7 +7,7 @@ executes or compiles analyzed code.
 
 import ast
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,7 +19,13 @@ from rift.analysis.python.options import (
     AnalysisOptions,
     running_python_version,
 )
-from rift.analysis.python.reading import FailureCode, ReadFailure, SourceFile, read_source
+from rift.analysis.python.reading import (
+    FailureCode,
+    ReadFailure,
+    SourceFile,
+    read_source,
+    source_from_bytes,
+)
 from rift.analysis.python.resolver import FileResolver, Resolver
 from rift.analysis.python.walker import FileFacts, walk_module
 from rift.core.ids import NodeId, SymbolId, file_node_id, module_node_id
@@ -84,6 +90,32 @@ def analyze_files(
         else detect_source_roots(paths)
     )
     sources = [read_source(root, path, max_bytes=opts.max_file_bytes) for path in paths]
+    return _analyze(sources, roots, limitations)
+
+
+def analyze_sources(
+    sources: Mapping[str, bytes],
+    *,
+    source_roots: Sequence[str],
+    options: AnalysisOptions | None = None,
+) -> ProjectAnalysis:
+    """Analyze in-memory file contents (repo-relative ``.py`` path → bytes) under the given
+    source roots, e.g. a base revision's version of changed files (ADR-0010 §4). Only the
+    given files are visible to name resolution."""
+    opts = options or AnalysisOptions()
+    paths = sorted(sources)
+    for path in paths:
+        if not is_repo_path(path) or not path.endswith(".py"):
+            raise AnalysisError(f"not a repository-relative .py path: {path!r}")
+    roots = tuple(validate_source_root(r) for r in source_roots)
+    loaded = [source_from_bytes(p, sources[p], max_bytes=opts.max_file_bytes) for p in paths]
+    return _analyze(loaded, roots, ())
+
+
+def _analyze(
+    sources: Sequence[SourceFile], roots: tuple[str, ...], limitations: Sequence[Limitation]
+) -> ProjectAnalysis:
+    paths = [source.path for source in sources]
     index = ModuleIndex(paths, roots)
     facts: dict[str, FileFacts] = {}
     failures: dict[str, ReadFailure] = {}

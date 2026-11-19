@@ -1,12 +1,14 @@
 """Determinism contract (SPEC §7.6): identical bytes across processes with different hash seeds.
 
 M1 scope: canonical JSON and content IDs of core models, and real-git ChangeSets. M2 adds Python
-AnalysisResults; M3 the dependency graph and its traversal output. M6 extends this file to whole
+AnalysisResults; M3 the dependency graph and its traversal output; M4 the ImpactResult of a real
+change. M6 extends this file to whole
 Change Proofs.
 """
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -23,6 +25,7 @@ from tests.fixtures.python_project import write_project
 PROBE = Path(__file__).with_name("determinism_probe.py")
 ANALYSIS_PROBE = Path(__file__).with_name("analysis_probe.py")
 GRAPH_PROBE = Path(__file__).with_name("graph_probe.py")
+IMPACT_PROBE = Path(__file__).with_name("impact_probe.py")
 SEEDS = ("0", "4242")
 
 
@@ -171,3 +174,35 @@ def test_graph_and_traversal_are_byte_identical_across_hash_seeds(tmp_path: Path
     assert DependencyGraph.from_dict(json.loads(first["output"][0])).to_dict() == json.loads(
         first["output"][0]
     )
+
+
+@pytest.mark.integration
+def test_impact_results_are_byte_identical_across_hash_seeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real change through git, analysis, graph and impact: identical under PYTHONHASHSEED 0
+    and 4242, and for a copy of the repository at a different absolute path."""
+    hermetic_git_env(monkeypatch, tmp_path)
+    repo = GitRepo.init(tmp_path / "repo")
+    sources = {k: v for k, v in ANALYSIS_PROJECT.items() if k not in {"big.py", "broken.py"}}
+    write_project(repo.root, sources)
+    repo.write(
+        "src/app/extra.py", "from app.models import Model\ndef make():\n    return Model()\n"
+    )
+    base = repo.commit_all("base")
+    models = repo.root / "src" / "app" / "models.py"
+    repo.write("src/app/models.py", models.read_text(encoding="utf-8") + "\n# edit\n")
+    core = (repo.root / "src" / "app" / "core.py").read_text(encoding="utf-8")
+    repo.write("src/app/core.py", core.replace("return f1()", "return f2()", 1))
+    (repo.root / "src" / "app" / "extra.py").unlink()
+    copy = tmp_path / "elsewhere" / "copy"
+    shutil.copytree(repo.root, copy)
+    first = _run([str(IMPACT_PROBE), str(repo.root), base], SEEDS[0])
+    second = _run([str(IMPACT_PROBE), str(copy), base], SEEDS[1])
+    assert first["set_order"] != second["set_order"]  # positive control
+    assert first["output"] == second["output"]
+    impact = json.loads(first["output"][1])
+    # Non-trivial: changed and affected nodes, explanations and completeness reasons.
+    assert len(impact["changed_nodes"]) > 2
+    assert len(impact["affected_nodes"]) > 2
+    assert impact["limitations"]
