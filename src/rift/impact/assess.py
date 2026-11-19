@@ -32,7 +32,12 @@ from rift.core.models.graph import (
     UnresolvedReason,
     UnresolvedReference,
 )
-from rift.core.models.impact import Completeness, ImpactExplanation, ImpactResult
+from rift.core.models.impact import (
+    INFORMATIONAL_LIMITATION_KINDS,
+    Completeness,
+    ImpactExplanation,
+    ImpactResult,
+)
 from rift.core.models.source import SymbolKind
 from rift.discovery.files import (
     LIMITATION_OUTSIDE_ROOT,
@@ -49,7 +54,7 @@ from rift.impact.mapping import ChangeMapping
 
 LIMITATION_ANALYSIS_FAILED = "analysis_failed"
 LIMITATION_UNRESOLVED = "unresolved_reference"
-LIMITATION_DYNAMIC_CODE = "dynamic_code_in_project"  # informational: never affects completeness
+LIMITATION_DYNAMIC_CODE = next(iter(INFORMATIONAL_LIMITATION_KINDS))  # "dynamic_code_in_project"
 _DYNAMIC = frozenset(
     {
         UnresolvedReason.DYNAMIC_IMPORT,
@@ -151,17 +156,34 @@ def _file_symbols(index: ProjectIndex, path: str) -> list[NodeId]:
     ]
 
 
-def _working_graph(
-    build: GraphBuild, mapping: ChangeMapping, index: ProjectIndex
-) -> DependencyGraph:
+@dataclass(frozen=True, slots=True)
+class _Working:
+    graph: DependencyGraph
+    anchored: frozenset[UnresolvedReference]  # references linked to a changed or removed anchor
+
+
+def _ref_anchor(
+    ref: UnresolvedReference, anchors: Mapping[str, NodeId], index: ProjectIndex
+) -> NodeId | None:
+    """The anchor a reference names, directly or by pytest's ``prepend`` short name."""
+    found = _anchor_for(ref.raw, anchors)
+    if found is not None:
+        return found
+    long_name = index.localized(ref.location.path, ref.raw)
+    return _anchor_for(long_name, anchors) if long_name else None
+
+
+def _working_graph(build: GraphBuild, mapping: ChangeMapping, index: ProjectIndex) -> _Working:
     """The graph plus the base-side (removed) nodes and the anchor links. The build's graph is
     never modified."""
     anchors = {a.name: a.anchor for a in mapping.anchors}
     links: list[Edge] = []
+    anchored: set[UnresolvedReference] = set()
     for ref in build.unresolved:
-        anchor = _anchor_for(ref.raw, anchors)
+        anchor = _ref_anchor(ref, anchors, index)
         if anchor is None or ref.source == anchor:
             continue
+        anchored.add(ref)
         links.append(_link(ref.source, anchor))
         source = index.facts(ref.source) if index.knows(ref.source) else None
         if source is not None and source.symbol is None and source.path in index.results:
@@ -175,7 +197,7 @@ def _working_graph(
         if anchor is not None and dangling.source != anchor:
             links.append(_link(dangling.source, anchor, like=dangling))
     if not links and not mapping.removed:
-        return build.graph
+        return _Working(graph=build.graph, anchored=frozenset(anchored))
     graph = build.graph.copy()
     for fact in mapping.removed:
         if not graph.has_node(fact.node):
@@ -187,7 +209,7 @@ def _working_graph(
             and graph.has_node(link.target)
         ):
             graph.add_edge(link)
-    return graph
+    return _Working(graph=graph, anchored=frozenset(anchored))
 
 
 def _analysis_limitations(
@@ -216,21 +238,29 @@ def _analysis_limitations(
     return found
 
 
-def _counts_for_completeness(ref: UnresolvedReference, project_names: frozenset[str]) -> bool:
+def _counts_for_completeness(
+    ref: UnresolvedReference,
+    project_names: frozenset[str],
+    anchored: frozenset[UnresolvedReference],
+) -> bool:
     """``external_module`` references cannot hide a project dependent (ADR-0010 §9): they stay in
-    ``unresolved`` but do not make the result partial. Guard: an import whose top-level name is
-    one of the project's own packages or modules is never treated as external."""
+    ``unresolved`` but do not make the result partial. Guard: an import is never treated as
+    external when its top-level name is one of the project's own packages or modules (head or
+    base side), or when it names a changed or removed module (directly or by pytest's short
+    name): then it is a broken internal import."""
     if ref.reason is not UnresolvedReason.EXTERNAL_MODULE:
         return True
-    return ref.raw.split(".", 1)[0] in project_names
+    return ref in anchored or ref.raw.split(".", 1)[0] in project_names
 
 
 def _unresolved_limitations(
-    refs: tuple[UnresolvedReference, ...], project_names: frozenset[str]
+    refs: tuple[UnresolvedReference, ...],
+    project_names: frozenset[str],
+    anchored: frozenset[UnresolvedReference],
 ) -> list[Limitation]:
     counts: dict[str, int] = {}
     for ref in refs:
-        if _counts_for_completeness(ref, project_names):
+        if _counts_for_completeness(ref, project_names, anchored):
             counts[ref.reason.value] = counts.get(ref.reason.value, 0) + 1
     return [
         Limitation(
@@ -271,7 +301,8 @@ def assess_impact(
     facts = index if index is not None else ProjectIndex(analysis)
     for removed in mapping.removed:
         facts.register(removed)
-    graph = _working_graph(build, mapping, facts)
+    working = _working_graph(build, mapping, facts)
+    graph = working.graph
     changed = mapping.changed_nodes
     starts = [node for node in mapping.starts if graph.has_node(node)]
     reach = graph.reverse_reachable(
@@ -280,7 +311,10 @@ def assess_impact(
     changed_set = frozenset(changed)
     affected = tuple(node for node in reach.nodes if node not in changed_set)
     impact_set = changed_set | frozenset(reach.nodes)
-    related = tuple(sorted(node for node in impact_set if node.startswith("test:")))
+    # A removed test (its file deleted or the function gone) cannot run: changed, not related.
+    related = tuple(
+        sorted(n for n in impact_set if n.startswith("test:") and not facts.facts(n).removed)
+    )
 
     unresolved = sort_unique(
         [u for u in build.unresolved if u.source in impact_set], unresolved_sort_key
@@ -289,7 +323,7 @@ def assess_impact(
     reasons = [
         *mapping.limitations,
         *_analysis_limitations(analysis, impact_files),
-        *_unresolved_limitations(unresolved, facts.top_level_names()),
+        *_unresolved_limitations(unresolved, facts.top_level_names(), working.anchored),
     ]
     limitations = sort_unique([*reasons, *_dynamic_code_note(build)], limitation_sort_key)
     public_units = frozenset(

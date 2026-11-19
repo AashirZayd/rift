@@ -9,6 +9,9 @@ from rift.core.models.analysis import limitation_sort_key, unresolved_sort_key
 from rift.core.models.evidence import Limitation
 from rift.core.models.graph import UnresolvedReference
 
+# Limitation kinds that inform without affecting completeness (ADR-0010 §9).
+INFORMATIONAL_LIMITATION_KINDS = frozenset({"dynamic_code_in_project"})
+
 
 class ImpactClass(StrEnum):
     """Ordinal impact tier (SPEC §11.1). Not a risk probability."""
@@ -76,10 +79,13 @@ class ImpactResult:
         )
         strictly_sorted(self.unresolved, unresolved_sort_key, "unresolved")
         strictly_sorted(self.limitations, limitation_sort_key, "limitations")
-        require(
-            self.completeness is Completeness.COMPLETE or bool(self.limitations),
-            "a partial or unknown result must list at least one reason",
-        )
+        reasons = [
+            lim for lim in self.limitations if lim.kind not in INFORMATIONAL_LIMITATION_KINDS
+        ]
+        if self.completeness is Completeness.COMPLETE:
+            require(not reasons, "a complete result lists informational limitations only")
+        else:
+            require(bool(reasons), "a partial or unknown result must list at least one reason")
         changed, affected = set(self.changed_nodes), set(self.affected_nodes)
         require(not changed & affected, "a node is either changed or affected, not both")
         impact_set = changed | affected

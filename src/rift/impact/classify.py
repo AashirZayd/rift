@@ -13,8 +13,9 @@ The highest matching tier wins:
 
 - ``public_api``:
   - a changed or removed symbol is public (ADR-0010 §8) and its unit is a public package; or
-  - a deleted or moved-away file whose base side could not be parsed has a public module path
-    in a public package. Its symbols are unknown, so they are assumed public.
+  - a removed module path is public in a public package: a deleted module, a module renamed
+    away, or a deleted file whose base side could not be parsed. Every ``import`` of that path
+    breaks, whatever the module defined (a re-export shim has no public symbols of its own).
 - ``cross_package``: the crossing dependencies' ends span two or more units.
 - ``module``: some crossing dependency exists (one unit).
 - ``local``: no crossing dependency: everything stays inside the changed nodes' own modules.
@@ -59,7 +60,7 @@ def classify(  # noqa: PLR0913  # the inputs of one §11.1 decision, keyword-onl
     for fact in changed_facts:
         if fact.is_test_code or fact.unit not in public_units:
             continue
-        if fact.is_public or (fact.unanalyzed and fact.public_path):
+        if fact.is_public or (fact.removed and fact.symbol is None and fact.public_path):
             return ImpactClass.PUBLIC_API
     members = frozenset(impact_set)
     units: set[str] = set()

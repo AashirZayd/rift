@@ -196,6 +196,10 @@ class _Builder:
             old_module = self.index.module_name_for(changed_file.old_path)
             if old_module is not None and old_module != result.module:
                 self.anchors.setdefault(old_module, own)
+                gone = self.index.add_removed_module_path(old_module, changed_file.old_path)
+                if gone is not None:  # the old importable path is removed API
+                    self.changed.add(gone.node)
+                    self.removed[gone.node] = gone
 
     def _removed_symbols(self, changed_file: ChangedFile, result: AnalysisResult) -> bool:
         base_path = changed_file.old_path or changed_file.path
@@ -238,7 +242,8 @@ def map_changes(
     exclude: Sequence[str] = (),
 ) -> ChangeMapping:
     """Map a change set's files onto nodes. ``base`` is the base revision's analysis of the
-    modified and renamed files' old versions (``None``: removed symbols are not looked for)."""
+    modified, renamed and deleted files' old versions (``None``: removed symbols are not looked
+    for, and deleted files fall back to their file node)."""
     builder = _Builder(index, base, exclude)
     for changed_file in files:
         paths = [changed_file.path, changed_file.old_path or changed_file.path]

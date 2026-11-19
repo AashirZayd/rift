@@ -55,7 +55,13 @@ from rift.core.models.graph import (
     UnresolvedReason,
     UnresolvedReference,
 )
-from rift.core.models.impact import Completeness, ImpactClass, ImpactExplanation, ImpactResult
+from rift.core.models.impact import (
+    INFORMATIONAL_LIMITATION_KINDS,
+    Completeness,
+    ImpactClass,
+    ImpactExplanation,
+    ImpactResult,
+)
 from rift.core.models.plugin import PluginKind, PluginMetadata
 from rift.core.models.policy import (
     Invariant,
@@ -410,11 +416,12 @@ def impact_result(draw: Any) -> ImpactResult:
         path = (start,) if target == start else (start, *middle, target)
         explanations.append(ImpactExplanation(node=target, path=path))
     completeness = draw(st.sampled_from(Completeness))
+    reasons = limitation.filter(lambda lim: lim.kind not in INFORMATIONAL_LIMITATION_KINDS)
     limitations = (
         ()
         if completeness is Completeness.COMPLETE
         else _unique_by_key(
-            draw(st.lists(limitation, min_size=1, max_size=SMALL)), limitation_sort_key
+            draw(st.lists(reasons, min_size=1, max_size=SMALL)), limitation_sort_key
         )
     )
     tiers = [c for c in ImpactClass if (c is ImpactClass.NONE) == (not changed)]

@@ -158,7 +158,9 @@ def test_deleted_module_without_users_is_complete(project: tuple[GitRepo, str]) 
     impact = impact_of_changes(repo.root, base=base).impact
     assert impact.changed_nodes == ("py:app.spare", "py:app.spare:_unused")
     assert (impact.completeness, impact.limitations) == (Completeness.COMPLETE, ())
-    assert impact.classification is ImpactClass.LOCAL  # its only symbol was private
+    # Its only symbol was private, but its importable path app.spare is gone: removed public
+    # API (review of the decisions, #4).
+    assert impact.classification is ImpactClass.PUBLIC_API
 
 
 def test_deleted_file_whose_base_side_does_not_parse_falls_back(
@@ -188,7 +190,7 @@ def test_renamed_module_maps_under_its_new_path(project: tuple[GitRepo, str]) ->
     impact = outcome.impact
     # No line changed, but the base side shows that public app.api:handle no longer exists at
     # its old path (review #2): the rename removed public API.
-    assert impact.changed_nodes == ("py:app.api:handle", "py:app.endpoints")
+    assert impact.changed_nodes == ("py:app.api", "py:app.api:handle", "py:app.endpoints")
     # lib.util still imports the old name: it and its code reach the renamed module.
     assert impact.affected_nodes == ("py:lib.util", "py:lib.util:run")
     assert _reasons(impact) == [("unresolved_reference", "missing_module")]

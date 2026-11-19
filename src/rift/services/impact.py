@@ -1,8 +1,9 @@
 """Impact use cases (SPEC §11, §19 ``rift impact``): git → analysis → graph → ImpactResult.
 
 The head of a change is always the **working tree**. Analysis reads files from disk, so a
-revision that is not checked out cannot be analyzed (ADR-0010 §2). The base side of modified
-and renamed files is read from git objects and parsed in memory, only to find removed symbols.
+revision that is not checked out cannot be analyzed (ADR-0010 §2). The base side of modified,
+renamed and deleted files is read from git objects and parsed in memory, only to find removed
+symbols.
 The base defaults to config ``git.default_base``, then ``merge-base HEAD origin/HEAD``
 (SPEC §8).
 """

@@ -143,6 +143,7 @@ class ProjectIndex:
             for fact in _symbol_facts(result, under_roots=under_roots):
                 facts[fact.node] = fact
         self._facts: dict[NodeId, NodeFacts] = facts
+        self._modules = modules
         self.results: Mapping[str, AnalysisResult] = MappingProxyType(results)
 
     def knows(self, node: NodeId) -> bool:
@@ -162,11 +163,19 @@ class ProjectIndex:
         return ModuleIndex([*self._analyzed_paths, path], self.source_roots).module_of(path)
 
     def top_level_names(self) -> frozenset[str]:
-        """The top-level package or module names of the analyzed project (every source root,
-        fallback-named files included)."""
-        return frozenset(
-            f.module.split(".", 1)[0] for f in self._facts.values() if f.module and not f.removed
-        )
+        """The top-level package or module names of the project (every source root, fallback-named
+        files included), on the head side and the base side: a deleted top-level module is still
+        the project's own name."""
+        return frozenset(f.module.split(".", 1)[0] for f in self._facts.values() if f.module)
+
+    def localized(self, path: str, name: str) -> str | None:
+        """pytest's ``prepend`` mode lets a fallback-named file import a sibling by a short name
+        (``import helpers`` in ``tests/`` means ``tests.helpers``, ADR-0008): the long name, or
+        ``None`` for a file under the source roots."""
+        if path in self.results and not self._modules.is_fallback(path):
+            return None
+        prefix = self._modules.pytest_base_package(path)
+        return f"{prefix}.{name}" if prefix else None
 
     def add_removed_module(self, base: AnalysisResult) -> list[NodeFacts]:
         """Facts for every node of a deleted file, from its base-side analysis: its own node
@@ -225,6 +234,25 @@ class ProjectIndex:
             added.append(fact)
         return added
 
+    def add_removed_module_path(self, module: str, path: str) -> NodeFacts | None:
+        """The module node of a module name that no longer exists (a module renamed away): its
+        importable path is gone. ``None`` if that node still exists."""
+        node = module_node_id(module)
+        if node in self._facts:
+            return None
+        fact = NodeFacts(
+            node=node,
+            path=path,
+            module=module,
+            unit=unit_of(module, path),
+            symbol=None,
+            is_test_code=is_test_code_path(path),
+            under_source_roots=self._under_roots(path),
+            removed=True,
+        )
+        self._facts[node] = fact
+        return fact
+
     def register(self, fact: NodeFacts) -> None:
         """Add a removed node's facts (made by another index for the same analysis)."""
         self._facts.setdefault(fact.node, fact)
@@ -236,13 +264,13 @@ class ProjectIndex:
 
     def public_units(self) -> tuple[str, ...]:
         """Default ``project.public_packages``: every top-level package of non-test code under
-        the source roots (SPEC §11.1)."""
+        the source roots (SPEC §11.1), base-side (deleted) packages included."""
         return tuple(
             sorted(
                 {
                     f.unit
                     for f in self._facts.values()
-                    if f.module and f.under_source_roots and not f.is_test_code and not f.removed
+                    if f.module and f.under_source_roots and not f.is_test_code
                 }
             )
         )

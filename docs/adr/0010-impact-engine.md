@@ -67,8 +67,9 @@
 
      Otherwise a symbol-only edit reaches only the code that uses the changed symbols.
    - **Added / copied / binary**: every symbol is changed.
-   - **Renamed**: the same rules, under the new path. A rename to a path that is not analyzed is
-     handled as a deletion of the old path.
+   - **Renamed**: the same rules, under the new path. If the module name changed, the old
+     module node is a removed node: its importable path is gone. A rename to a path that is not
+     analyzed is handled as a deletion of the old path.
    - **Deleted `.py`** (decided by the user after the M4 review): every node of the file's
      base-side analysis, i.e. its module node and all its symbols, so a deleted public symbol is
      public API removed. Only if the base side cannot be parsed (no blob, a parse or decode
@@ -86,7 +87,9 @@
    - Each changed module, removed symbol, deleted file and renamed-away module name has an anchor
      node.
    - An unresolved reference whose `raw` or one of its dotted prefixes names an anchor (the most
-     specific wins) links its source to the anchor, at `likely`, kind `references`. A dangling
+     specific wins) links its source to the anchor, at `likely`, kind `references`. In a
+     fallback-named file, the pytest `prepend` long name `<base package>.<raw>` is tried too
+     (ADR-0008), so `import helpers` in `tests/` reaches a deleted `tests/helpers.py`. A dangling
      `py:` edge into an anchor links the same way, with its own kind and confidence.
    - When the source is a module or file node (a failed module-level import), every symbol of
      that file is linked too: the whole module fails to import, its tests included.
@@ -102,7 +105,8 @@
 
    Collected from the traversal:
    - `affected_nodes`: everything reached that is not changed;
-   - `related_tests`: the `test:` nodes in the impact set (changed plus affected);
+   - `related_tests`: the `test:` nodes in the impact set (changed plus affected), except removed
+     tests: a deleted test is a changed node but cannot be run;
    - `unresolved`: the unresolved references whose source is in the impact set;
    - `public_interfaces`: the public symbols in the impact set, removed ones included;
    - one explanation per affected node and related test. Each starts at a changed node; a
@@ -118,7 +122,7 @@
 
      | Tier | Rule |
      |---|---|
-     | `public_api` | a changed or removed symbol is public in a public package, or a deleted or moved-away file whose base side could not be parsed has a public module path in a public package (its symbols are unknown, so they are assumed public) |
+     | `public_api` | a changed or removed symbol is public in a public package, or a removed module path (a deleted module, a module renamed away, or a deleted file whose base side could not be parsed) is public in a public package: every `import` of that path breaks, whatever the module defined |
      | `cross_package` | the crossing dependencies' ends span two or more units |
      | `module` | some crossing dependency exists |
      | `local` | no crossing dependency |
@@ -140,8 +144,8 @@
      - it is not test code.
    - Public packages default to every top-level package of non-test code **under the source
      roots** (SPEC §11.1). Fallback-named code outside them (e.g. `tests/` in a `src/` layout) is
-     never public. `ImpactSettings.public_packages` overrides the default with a validated tuple
-     of names.
+     never public. Deleted packages count: a deleted top-level package is still the project's.
+     `ImpactSettings.public_packages` overrides the default with a validated tuple of names.
 
 ### Completeness (§11, model change)
 
@@ -152,11 +156,11 @@
 
    | Kind | Subject | When |
    |---|---|---|
-   | `unresolved_reference` | the reason | at least one unresolved reference with that reason touches the impact set; the count is in the message, and the references are in `unresolved`. `external_module` does **not** count (user decision): an external import cannot hide a project dependent. Guard: a reference whose top-level name is one of the project's own packages or modules (any source root) always counts, and a broken internal import is `missing_module` anyway |
+   | `unresolved_reference` | the reason | at least one unresolved reference with that reason touches the impact set; the count is in the message, and the references are in `unresolved`. `external_module` does **not** count (user decision): an external import cannot hide a project dependent. Guard: it counts when its top-level name is one of the project's own packages or modules on the head **or base** side (any source root), or when it names a changed or removed module (directly or by pytest short name). A deleted top-level module is labelled `external_module` by the head analyzer, but it is a broken internal import |
    | `analysis_failed` | file path | the file has an error diagnostic (parse or decode failure), wherever it is |
    | `oversized_file` and discovery skips (`symlink_skipped`, ...) | path | the file was skipped, wherever it is |
    | other analyzer kinds (`non_literal_all`, `module_shadowed`, ...) | path | only when the file is in the impact set |
-   | `deleted_without_analysis` | file path | a deleted file had no prior analysis |
+   | `deleted_without_analysis` | file path | a deleted file's base side could not be parsed (no blob, a parse or decode failure, oversized) |
    | `stub_not_analyzed` | file path | a changed `.pyi` |
 
    Informational (does not affect completeness):
@@ -169,8 +173,9 @@
    changed module's package will make the result `partial` and trigger the full suite.
 
    - `unknown` is not produced in M4: analysis that cannot run raises a structured `RiftError`.
-   - The model also requires:
-     - at least one limitation when the result is not `complete`;
+   - The model also requires (with `INFORMATIONAL_LIMITATION_KINDS` in core):
+     - a `complete` result carries informational limitations only;
+     - a `partial` or `unknown` result lists at least one non-informational reason;
      - sorted `unresolved` and `limitations`;
      - `test:` IDs in `related_tests`;
      - changed and affected nodes disjoint;
@@ -222,6 +227,14 @@ The first version:
   cannot be parsed (4).
 - Project-wide non-literal dynamic imports are reported once, informationally (9). The
   prefix heuristic is on the M5 checklist.
+- The fresh-context review of these decisions found the following, all fixed with real-git
+  tests (`tests/integration/services/test_impact_deletions.py`):
+  - the guard missed a deleted top-level module, which the head labels external;
+  - a deleted top-level package was not a public unit;
+  - a pytest-prepend import of a deleted helper was missed;
+  - a deleted public module path without public symbols was no longer `public_api`;
+  - removed tests appeared as related tests;
+  - the relaxed model invariant was broader than needed.
 
 ## Alternatives considered
 
@@ -267,3 +280,7 @@ Known limitations:
   `dynamic_code_in_project` entry; the M5 prefix heuristic will narrow this.
 - Test code is recognised by path conventions only.
 - Head must be the working tree.
+- The base-side snapshot holds only the changed files, so base-side naming cannot see the full
+  base file set. A deleted `pkg/foo.py` that `pkg/foo/__init__.py` shadowed on the base side is
+  named `pkg.foo`: a conservative false positive.
+- The `dynamic_code_in_project` message lists every file and has no size bound.

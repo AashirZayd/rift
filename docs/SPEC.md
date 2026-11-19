@@ -215,7 +215,7 @@ Minimum fields below; implementers may add fields, never remove these without an
 - `test:<pytest-node-id>` → `test:tests/test_auth.py::TestLogin::test_ok`
 
 ### 6.4 Impact / verification / evidence / policy / proof
-- `ImpactResult(changed_nodes, affected_nodes, public_interfaces, related_tests, unresolved, classification: ImpactClass, completeness: Completeness, limitations: tuple[Limitation, ...], explanations)` — `limitations` lists every reason the result is not complete (`partial`/`unknown` always has at least one), plus informational entries that do not affect completeness
+- `ImpactResult(changed_nodes, affected_nodes, public_interfaces, related_tests, unresolved, classification: ImpactClass, completeness: Completeness, limitations: tuple[Limitation, ...], explanations)` — `limitations` lists every reason the result is not complete (`partial`/`unknown` always has at least one), plus informational entries of documented kinds that do not affect completeness (a `complete` result carries only those)
 - `Completeness`: `complete | partial | unknown`
 - `VerificationPlan(mode: PlanMode, selected: tuple[PlannedCheck, ...], excluded: tuple[ExclusionRecord, ...], full_suite_recommended: bool, reasons: tuple[str, ...])`
 - `PlanMode`: `selective | full_suite`

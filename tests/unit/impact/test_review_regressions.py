@@ -304,7 +304,7 @@ def test_public_packages_are_validated(value: object) -> None:
         ),
         pytest.param(
             _file("pkg/core.py", ChangeStatus.RENAMED, 2, old="pkg/old.py"),
-            {"py:pkg.core", "py:pkg.core:f"},
+            {"py:pkg.core", "py:pkg.core:f", "py:pkg.old"},  # the old module path is removed
             id="renamed-and-modified",
         ),
     ],
