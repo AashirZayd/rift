@@ -1,4 +1,4 @@
-"""Graph errors: structural violations raised by :class:`rift.graph.DependencyGraph`."""
+"""Graph errors: structural violations raised by :class:`rift.graph.multigraph.DependencyGraph`."""
 
 from rift.core.errors import ErrorCode, RiftError
 
