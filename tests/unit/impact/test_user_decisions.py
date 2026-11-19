@@ -95,3 +95,30 @@ def test_project_wide_dynamic_imports_add_one_informational_entry(tmp_path: Path
     assert (note.kind, note.subject) == ("dynamic_code_in_project", None)
     assert note.message.endswith("pkg/boot.py, pkg/plugins.py")  # sorted; literal import excluded
     assert "2 file(s)" in note.message
+
+
+def test_dynamic_code_note_names_the_first_50_files_then_a_count(tmp_path: Path) -> None:
+    """Follow-up 2: the message is capped at 50 sorted paths plus "... and N more"."""
+    dynamic = "import importlib\ndef load(name):\n    return importlib.import_module(name)\n"
+    files: dict[str, str | bytes] = {"pkg/__init__.py": "", "pkg/core.py": CORE_BODY}
+    files.update({f"pkg/dyn_{n:02d}.py": dynamic for n in range(53)})
+    analysis = analyze(tmp_path, files)
+    result = impact_of_change(analysis, [modified("pkg/core.py", 2)])
+    (note,) = result.limitations
+    shown = ", ".join(f"pkg/dyn_{n:02d}.py" for n in range(50))
+    assert note.message == (
+        "non-literal dynamic imports or code loading in 53 file(s), any of which may load "
+        f"changed code (does not affect completeness): {shown}, ... and 3 more"
+    )
+    again = impact_of_change(analyze(tmp_path / "again", files), [modified("pkg/core.py", 2)])
+    assert again.limitations == result.limitations  # deterministic
+
+
+def test_dynamic_code_note_at_exactly_50_files_has_no_suffix(tmp_path: Path) -> None:
+    dynamic = "import importlib\ndef load(name):\n    return importlib.import_module(name)\n"
+    files: dict[str, str | bytes] = {"pkg/__init__.py": "", "pkg/core.py": CORE_BODY}
+    files.update({f"pkg/dyn_{n:02d}.py": dynamic for n in range(50)})
+    result = impact_of_change(analyze(tmp_path, files), [modified("pkg/core.py", 2)])
+    (note,) = result.limitations
+    assert note.message.endswith("pkg/dyn_48.py, pkg/dyn_49.py")
+    assert "more" not in note.message

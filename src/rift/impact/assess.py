@@ -55,6 +55,7 @@ from rift.impact.mapping import ChangeMapping
 LIMITATION_ANALYSIS_FAILED = "analysis_failed"
 LIMITATION_UNRESOLVED = "unresolved_reference"
 LIMITATION_DYNAMIC_CODE = next(iter(INFORMATIONAL_LIMITATION_KINDS))  # "dynamic_code_in_project"
+DYNAMIC_CODE_FILES_SHOWN = 50  # the message names the first 50 files (sorted), then a count
 _DYNAMIC = frozenset(
     {
         UnresolvedReason.DYNAMIC_IMPORT,
@@ -278,11 +279,14 @@ def _dynamic_code_note(build: GraphBuild) -> list[Limitation]:
     files = sorted({ref.location.path for ref in build.unresolved if ref.reason in _DYNAMIC})
     if not files:
         return []
+    shown = ", ".join(files[:DYNAMIC_CODE_FILES_SHOWN])
+    hidden = len(files) - DYNAMIC_CODE_FILES_SHOWN
+    more = f", ... and {hidden} more" if hidden > 0 else ""
     return [
         Limitation(
             kind=LIMITATION_DYNAMIC_CODE,
             message=f"non-literal dynamic imports or code loading in {len(files)} file(s), any of "
-            f"which may load changed code (does not affect completeness): {', '.join(files)}",
+            f"which may load changed code (does not affect completeness): {shown}{more}",
             subject=None,
         )
     ]

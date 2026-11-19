@@ -68,10 +68,12 @@ class NodeFacts:
 
     @property
     def public_path(self) -> bool:
-        """The module path has no private segment, and the file is not test code."""
+        """No segment of the dotted module path starts with ``_`` (dunders included: a
+        ``pkg/__main__.py`` path is not public API; ADR-0010 follow-up), and the file is not test
+        code. Symbol qualname segments keep the dunder exception (``__init__`` is public)."""
         if self.module is None or self.is_test_code:
             return False
-        return not any(_is_private(segment) for segment in self.module.split("."))
+        return not any(segment.startswith("_") for segment in self.module.split("."))
 
     @property
     def is_public(self) -> bool:
