@@ -74,14 +74,16 @@ def _assess(
     )
 
 
-_BASE_SIDE = frozenset({ChangeStatus.MODIFIED, ChangeStatus.RENAMED, ChangeStatus.TYPE_CHANGED})
+_BASE_SIDE = frozenset(
+    {ChangeStatus.MODIFIED, ChangeStatus.RENAMED, ChangeStatus.TYPE_CHANGED, ChangeStatus.DELETED}
+)
 
 
 def _base_snapshot(
     project: _Project, changes: ChangeSet, options: ImpactOptions
 ) -> ProjectAnalysis | None:
-    """The base revision's version of the modified and renamed ``.py`` files, parsed in memory
-    (never executed) to find removed symbols (ADR-0010 §4)."""
+    """The base revision's version of the modified, renamed and deleted ``.py`` files, parsed in
+    memory (never executed) to find removed symbols (ADR-0010 §4)."""
     commit = changes.base.commit
     paths = sorted(
         {

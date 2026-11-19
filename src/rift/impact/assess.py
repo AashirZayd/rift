@@ -29,6 +29,7 @@ from rift.core.models.graph import (
     EdgeOrigin,
     Node,
     NodeKind,
+    UnresolvedReason,
     UnresolvedReference,
 )
 from rift.core.models.impact import Completeness, ImpactExplanation, ImpactResult
@@ -48,6 +49,15 @@ from rift.impact.mapping import ChangeMapping
 
 LIMITATION_ANALYSIS_FAILED = "analysis_failed"
 LIMITATION_UNRESOLVED = "unresolved_reference"
+LIMITATION_DYNAMIC_CODE = "dynamic_code_in_project"  # informational: never affects completeness
+_DYNAMIC = frozenset(
+    {
+        UnresolvedReason.DYNAMIC_IMPORT,
+        UnresolvedReason.MODULE_GETATTR,
+        UnresolvedReason.SYS_PATH_MUTATION,
+        UnresolvedReason.EXEC_EVAL,
+    }
+)
 # A skipped file was never analyzed: its dependencies are unknown wherever it is.
 _SKIPS = frozenset(
     {
@@ -126,6 +136,8 @@ def _anchor_for(dotted: str, anchors: Mapping[str, NodeId]) -> NodeId | None:
 
 def _removed_node(fact: NodeFacts) -> Node:
     if fact.symbol is None:
+        if fact.node.startswith("py:") and fact.module is not None:
+            return Node(id=fact.node, kind=NodeKind.MODULE, label=fact.module, location=None)
         return Node(id=fact.node, kind=NodeKind.FILE, label=fact.path, location=None)
     kind = NodeKind.TEST if fact.node.startswith("test:") else _NODE_KINDS[fact.symbol.kind]
     return Node(id=fact.node, kind=kind, label=fact.symbol.qualname, location=fact.symbol.location)
@@ -204,10 +216,22 @@ def _analysis_limitations(
     return found
 
 
-def _unresolved_limitations(refs: tuple[UnresolvedReference, ...]) -> list[Limitation]:
+def _counts_for_completeness(ref: UnresolvedReference, project_names: frozenset[str]) -> bool:
+    """``external_module`` references cannot hide a project dependent (ADR-0010 §9): they stay in
+    ``unresolved`` but do not make the result partial. Guard: an import whose top-level name is
+    one of the project's own packages or modules is never treated as external."""
+    if ref.reason is not UnresolvedReason.EXTERNAL_MODULE:
+        return True
+    return ref.raw.split(".", 1)[0] in project_names
+
+
+def _unresolved_limitations(
+    refs: tuple[UnresolvedReference, ...], project_names: frozenset[str]
+) -> list[Limitation]:
     counts: dict[str, int] = {}
     for ref in refs:
-        counts[ref.reason.value] = counts.get(ref.reason.value, 0) + 1
+        if _counts_for_completeness(ref, project_names):
+            counts[ref.reason.value] = counts.get(ref.reason.value, 0) + 1
     return [
         Limitation(
             kind=LIMITATION_UNRESOLVED,
@@ -215,6 +239,22 @@ def _unresolved_limitations(refs: tuple[UnresolvedReference, ...]) -> list[Limit
             subject=reason,
         )
         for reason, count in sorted(counts.items())
+    ]
+
+
+def _dynamic_code_note(build: GraphBuild) -> list[Limitation]:
+    """One informational entry naming every file with a non-literal dynamic import or code
+    loading anywhere in the project (ADR-0010 §9). It does not affect completeness."""
+    files = sorted({ref.location.path for ref in build.unresolved if ref.reason in _DYNAMIC})
+    if not files:
+        return []
+    return [
+        Limitation(
+            kind=LIMITATION_DYNAMIC_CODE,
+            message=f"non-literal dynamic imports or code loading in {len(files)} file(s), any of "
+            f"which may load changed code (does not affect completeness): {', '.join(files)}",
+            subject=None,
+        )
     ]
 
 
@@ -246,14 +286,12 @@ def assess_impact(
         [u for u in build.unresolved if u.source in impact_set], unresolved_sort_key
     )
     impact_files = frozenset(facts.facts(node).path for node in impact_set)
-    limitations = sort_unique(
-        [
-            *mapping.limitations,
-            *_analysis_limitations(analysis, impact_files),
-            *_unresolved_limitations(unresolved),
-        ],
-        limitation_sort_key,
-    )
+    reasons = [
+        *mapping.limitations,
+        *_analysis_limitations(analysis, impact_files),
+        *_unresolved_limitations(unresolved, facts.top_level_names()),
+    ]
+    limitations = sort_unique([*reasons, *_dynamic_code_note(build)], limitation_sort_key)
     public_units = frozenset(
         opts.public_packages if opts.public_packages is not None else facts.public_units()
     )
@@ -280,7 +318,7 @@ def assess_impact(
             public_units=public_units,
             min_confidence=opts.min_confidence,
         ),
-        completeness=Completeness.PARTIAL if limitations else Completeness.COMPLETE,
+        completeness=Completeness.PARTIAL if reasons else Completeness.COMPLETE,
         limitations=limitations,
         explanations=tuple(ImpactExplanation(node=n, path=paths[n]) for n in explained),
     )

@@ -121,16 +121,16 @@ def test_whitespace_only_edit_between_symbols_changes_the_module_only(
     assert impact.classification is ImpactClass.CROSS_PACKAGE
 
 
-def test_deleted_module_is_a_file_node_only_and_partial(project: tuple[GitRepo, str]) -> None:
+def test_deleted_module_maps_to_its_base_side_nodes(project: tuple[GitRepo, str]) -> None:
+    """User decision: a deleted file is parsed on the base side, so its symbols are known."""
     repo, _ = project
     (repo.root / "src" / "app" / "core.py").unlink()
     impact = _impact(project).impact
-    assert impact.changed_nodes == ("file:src/app/core.py",)
+    assert impact.changed_nodes == ("py:app.core", "py:app.core:_helper", "py:app.core:compute")
+    # Partial only because code still imports the deleted module (missing_module), not because
+    # the deletion was unanalyzable.
     assert impact.completeness is Completeness.PARTIAL
-    assert _reasons(impact) == [
-        ("deleted_without_analysis", "src/app/core.py"),
-        ("unresolved_reference", "missing_module"),
-    ]
+    assert _reasons(impact) == [("unresolved_reference", "missing_module")]
     # Code that still imports the deleted module reaches the change; a failed module-level
     # import affects every symbol of the importing file, so the test is related (review #8).
     assert impact.affected_nodes == (
@@ -143,9 +143,35 @@ def test_deleted_module_is_a_file_node_only_and_partial(project: tuple[GitRepo, 
     )
     assert impact.related_tests == (TEST,)
     paths = {str(e.node): e.path for e in impact.explanations}
-    assert paths[TEST] == ("file:src/app/core.py", TEST)
-    assert paths["py:lib.util"] == ("file:src/app/core.py", "py:app.api", "py:lib.util")
-    # Its public symbols are unknown without a cache, so a public module path counts as public.
+    assert paths[TEST] == ("py:app.core", TEST)
+    assert paths["py:lib.util"] == ("py:app.core", "py:app.api", "py:lib.util")
+    # The deleted public function compute is public API removed.
+    assert "py:app.core:compute" in impact.public_interfaces
+    assert impact.classification is ImpactClass.PUBLIC_API
+
+
+def test_deleted_module_without_users_is_complete(project: tuple[GitRepo, str]) -> None:
+    repo, _ = project
+    repo.write("src/app/spare.py", "def _unused():\n    return 1\n")
+    base = repo.commit_all("spare")
+    (repo.root / "src" / "app" / "spare.py").unlink()
+    impact = impact_of_changes(repo.root, base=base).impact
+    assert impact.changed_nodes == ("py:app.spare", "py:app.spare:_unused")
+    assert (impact.completeness, impact.limitations) == (Completeness.COMPLETE, ())
+    assert impact.classification is ImpactClass.LOCAL  # its only symbol was private
+
+
+def test_deleted_file_whose_base_side_does_not_parse_falls_back(
+    project: tuple[GitRepo, str],
+) -> None:
+    repo, _ = project
+    repo.write("src/app/broken.py", "def f(:\n")
+    base = repo.commit_all("broken")
+    (repo.root / "src" / "app" / "broken.py").unlink()
+    impact = impact_of_changes(repo.root, base=base).impact
+    assert impact.changed_nodes == ("file:src/app/broken.py",)
+    assert _reasons(impact) == [("deleted_without_analysis", "src/app/broken.py")]
+    # Symbols unknown: a public module path is assumed to be public API.
     assert impact.classification is ImpactClass.PUBLIC_API
 
 

@@ -45,6 +45,14 @@ def _result(**overrides: object) -> ImpactResult:
     return ImpactResult(**{**base, **overrides})  # type: ignore[arg-type]  # test builder
 
 
+def test_complete_result_may_carry_informational_limitations() -> None:
+    """ADR-0010 §9 (user decision): e.g. project-wide dynamic imports do not affect completeness."""
+    note = Limitation(
+        kind="dynamic_code_in_project", message="dynamic imports in x.py", subject=None
+    )
+    assert _result(limitations=(note,)).completeness is Completeness.COMPLETE
+
+
 def test_valid_result_round_trips() -> None:
     result = _result(
         completeness=Completeness.PARTIAL,
@@ -59,7 +67,6 @@ def test_valid_result_round_trips() -> None:
     [
         pytest.param({"completeness": Completeness.PARTIAL}, id="partial-without-reasons"),
         pytest.param({"completeness": Completeness.UNKNOWN}, id="unknown-without-reasons"),
-        pytest.param({"limitations": (REASON,)}, id="complete-with-reasons"),
         pytest.param({"related_tests": (B,)}, id="non-test-related-test"),
         pytest.param(
             {"explanations": (ImpactExplanation(node=T, path=(A, T)),)},

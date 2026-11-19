@@ -11,11 +11,12 @@
   renamed file is parsed in memory (``analyze_sources``; never executed). Its symbols whose
   nodes no longer exist are changed nodes. That covers a removed or renamed function, and every
   symbol of a module that moved to a new module name.
-- A deleted ``.py`` file maps to its ``file:`` node only, with reason
-  ``deleted_without_analysis``: there is no cache before M5, and the user's rule keeps deleted
-  files file-node-only. A rename to a path that is not analyzed is handled as a deletion of the
-  old path. Deleted paths that the configured exclusions match map to nothing, like their
-  modifications.
+- A deleted ``.py`` file maps to every node of its base-side analysis: its module node and
+  all its symbols, so a deleted public symbol is public API removed. Only if the base side
+  cannot be parsed (missing blob, parse or decode failure, oversized) does it fall back to its
+  ``file:`` node, with reason ``deleted_without_analysis``. A rename to a path that is not
+  analyzed is handled as a deletion of the old path. Deleted paths that the configured
+  exclusions match map to nothing, like their modifications.
 - A whitespace-only edit is a change like any other.
 - A changed ``.pyi`` stub is not analyzed (ADR-0007), so it adds reason ``stub_not_analyzed``.
 - Other files that are not analyzed (non-Python, ignored, excluded) map to nothing.
@@ -24,11 +25,12 @@
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
-from rift.analysis.python.analyzer import ProjectAnalysis
+from rift.analysis.python.analyzer import LIMITATION_OVERSIZED, ProjectAnalysis
 from rift.core.errors import ErrorCode
 from rift.core.ids import NodeId, file_node_id, module_node_id
 from rift.core.models.analysis import AnalysisResult, limitation_sort_key, sort_unique
 from rift.core.models.change import ChangedFile, ChangeStatus, LineRange
+from rift.core.models.diagnostic import DiagnosticSeverity
 from rift.core.models.evidence import Limitation
 from rift.core.models.source import Symbol, SymbolKind
 from rift.discovery.files import matches_exclude
@@ -88,6 +90,13 @@ def _subtract(
                 remaining.append((hole_end + 1, end))
         parts = remaining
     return parts
+
+
+def _parsed(base: AnalysisResult) -> bool:
+    """The base side was parsed: no error diagnostic and not skipped as oversized."""
+    return not any(d.severity is DiagnosticSeverity.ERROR for d in base.diagnostics) and not any(
+        lim.kind == LIMITATION_OVERSIZED for lim in base.limitations
+    )
 
 
 def own_node(result: AnalysisResult) -> NodeId:
@@ -151,6 +160,11 @@ class _Builder:
     def deleted(self, path: str) -> None:
         if not path.endswith(".py") or matches_exclude(path, self.exclude):
             return
+        base = self.base.get(path)
+        if base is not None and _parsed(base):
+            for fact in self.index.add_removed_module(base):
+                self._remove(fact)
+            return
         fact = self.index.add_removed_file(path)
         self.changed.add(fact.node)
         self.starts.add(fact.node)
@@ -158,8 +172,8 @@ class _Builder:
         self.limitations.append(
             Limitation(
                 kind=LIMITATION_DELETED,
-                message="deleted file has no prior analysis (no cache before M5): only its file "
-                "node is known",
+                message="the deleted file's base side could not be parsed: only its file node "
+                "is known",
                 subject=path,
             )
         )
@@ -191,12 +205,18 @@ class _Builder:
         current = {_node(s) for s in result.symbols}
         added = self.index.add_removed_symbols(base, keep=current)
         for fact in added:
-            self.changed.add(fact.node)
-            self.starts.add(fact.node)
-            self.removed[fact.node] = fact
-            if fact.symbol is not None and fact.module is not None:
-                self.anchors.setdefault(f"{fact.module}.{fact.symbol.qualname}", fact.node)
+            self._remove(fact)
         return bool(added)
+
+    def _remove(self, fact: NodeFacts) -> None:
+        """A base-side node that no longer exists: changed, a start, and an anchor."""
+        self.changed.add(fact.node)
+        self.starts.add(fact.node)
+        self.removed[fact.node] = fact
+        if fact.module is None:
+            return
+        name = fact.module if fact.symbol is None else f"{fact.module}.{fact.symbol.qualname}"
+        self.anchors.setdefault(name, fact.node)
 
     def build(self) -> ChangeMapping:
         return ChangeMapping(

@@ -47,9 +47,10 @@ class ImpactResult:
     """What a change could affect (SPEC §11).
 
     ``classification`` is an ordinal tier, never a risk probability. ``completeness`` is
-    orthogonal to it: ``limitations`` lists every reason the result is not complete, so it is
-    empty exactly when ``completeness`` is ``complete``. Every affected node and related test has
-    an explanation path from a changed node.
+    orthogonal to it: ``limitations`` lists every reason the result is not complete (a partial or
+    unknown result always has at least one), plus informational entries that do not affect
+    completeness (e.g. project-wide dynamic imports, ADR-0010 §9). Every affected node and related
+    test has an explanation path from a changed node.
     """
 
     changed_nodes: tuple[NodeId, ...]
@@ -76,8 +77,8 @@ class ImpactResult:
         strictly_sorted(self.unresolved, unresolved_sort_key, "unresolved")
         strictly_sorted(self.limitations, limitation_sort_key, "limitations")
         require(
-            (self.completeness is Completeness.COMPLETE) == (not self.limitations),
-            "limitations must be empty exactly when completeness is complete",
+            self.completeness is Completeness.COMPLETE or bool(self.limitations),
+            "a partial or unknown result must list at least one reason",
         )
         changed, affected = set(self.changed_nodes), set(self.affected_nodes)
         require(not changed & affected, "a node is either changed or affected, not both")

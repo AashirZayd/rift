@@ -44,7 +44,8 @@ class NodeFacts:
     (``file:<path>``). ``symbol`` is set for class, function, method, constant and test nodes.
     ``top_visibility`` is the analyzer's visibility of the symbol's top-level ancestor (it
     honours ``__all__``). ``removed`` marks a node that exists only on the base side (a removed
-    symbol, or a deleted file's node)."""
+    symbol, or a deleted file's node); ``unanalyzed`` marks a deleted file whose base side could
+    not be parsed, so its symbols are unknown."""
 
     node: NodeId
     path: str
@@ -55,6 +56,7 @@ class NodeFacts:
     under_source_roots: bool
     top_visibility: Visibility | None = None
     removed: bool = False
+    unanalyzed: bool = False
 
     @property
     def is_symbol(self) -> bool:
@@ -159,8 +161,41 @@ class ProjectIndex:
             return self.results[path].module
         return ModuleIndex([*self._analyzed_paths, path], self.source_roots).module_of(path)
 
+    def top_level_names(self) -> frozenset[str]:
+        """The top-level package or module names of the analyzed project (every source root,
+        fallback-named files included)."""
+        return frozenset(
+            f.module.split(".", 1)[0] for f in self._facts.values() if f.module and not f.removed
+        )
+
+    def add_removed_module(self, base: AnalysisResult) -> list[NodeFacts]:
+        """Facts for every node of a deleted file, from its base-side analysis: its own node
+        (module node, or file node if it had no module name) and all its symbols."""
+        under_roots = self._under_roots(base.file_path)
+        facts = _symbol_facts(base, under_roots=under_roots, removed=True)
+        if base.module is None:
+            facts.append(
+                NodeFacts(
+                    node=file_node_id(base.file_path),
+                    path=base.file_path,
+                    module=None,
+                    unit=unit_of(None, base.file_path),
+                    symbol=None,
+                    is_test_code=is_test_code_path(base.file_path),
+                    under_source_roots=under_roots,
+                    removed=True,
+                )
+            )
+        added: list[NodeFacts] = []
+        for fact in facts:
+            if fact.node not in self._facts:
+                self._facts[fact.node] = fact
+                added.append(fact)
+        return added
+
     def add_removed_file(self, path: str) -> NodeFacts:
-        """Facts for the ``file:`` node of a deleted (or moved-away) file."""
+        """Facts for the ``file:`` node of a deleted (or moved-away) file whose base side could
+        not be parsed."""
         module = self.module_name_for(path)
         node = file_node_id(path)
         fact = NodeFacts(
@@ -172,6 +207,7 @@ class ProjectIndex:
             is_test_code=is_test_code_path(path),
             under_source_roots=self._under_roots(path),
             removed=True,
+            unanalyzed=True,
         )
         self._facts.setdefault(node, fact)
         return self._facts[node]
