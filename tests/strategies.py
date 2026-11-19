@@ -394,14 +394,21 @@ def sorted_node_ids(max_size: int = SMALL) -> st.SearchStrategy[tuple[NodeId, ..
 
 @st.composite
 def impact_result(draw: Any) -> ImpactResult:
-    affected = draw(sorted_node_ids())
-    related = draw(st.lists(test_id, max_size=SMALL, unique=True).map(lambda v: tuple(sorted(v))))
-    extra = draw(sorted_node_ids())
-    explained = sorted({*affected, *related, *extra})
+    changed = draw(sorted_node_ids())
+    tests = draw(st.lists(test_id, max_size=SMALL, unique=True)) if changed else []
+    pool = set(draw(sorted_node_ids())) if changed else set()
+    affected = tuple(sorted((pool | set(tests)) - set(changed)))
+    related = tuple(sorted({*tests, *(n for n in changed if n.startswith("test:"))}))
+    impact_set = sorted({*changed, *affected})
+    public = tuple(
+        sorted(draw(st.sets(st.sampled_from(impact_set)) if impact_set else st.just(set())))
+    )
     explanations = []
-    for target in explained:
-        prefix = draw(st.lists(node_id, max_size=3))
-        explanations.append(ImpactExplanation(node=target, path=(*prefix, target)))
+    for target in sorted({*affected, *related}):
+        start = draw(st.sampled_from(changed))
+        middle = draw(st.lists(node_id, max_size=2))
+        path = (start,) if target == start else (start, *middle, target)
+        explanations.append(ImpactExplanation(node=target, path=path))
     completeness = draw(st.sampled_from(Completeness))
     limitations = (
         ()
@@ -410,13 +417,14 @@ def impact_result(draw: Any) -> ImpactResult:
             draw(st.lists(limitation, min_size=1, max_size=SMALL)), limitation_sort_key
         )
     )
+    tiers = [c for c in ImpactClass if (c is ImpactClass.NONE) == (not changed)]
     return ImpactResult(
-        changed_nodes=draw(sorted_node_ids()),
+        changed_nodes=changed,
         affected_nodes=affected,
-        public_interfaces=draw(sorted_node_ids()),
+        public_interfaces=public,
         related_tests=related,
         unresolved=_unique_by_key(draw(st.lists(unresolved, max_size=2)), unresolved_sort_key),
-        classification=draw(st.sampled_from(ImpactClass)),
+        classification=draw(st.sampled_from(tiers)),
         completeness=completeness,
         limitations=limitations,
         explanations=tuple(explanations),

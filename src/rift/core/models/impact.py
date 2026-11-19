@@ -79,9 +79,25 @@ class ImpactResult:
             (self.completeness is Completeness.COMPLETE) == (not self.limitations),
             "limitations must be empty exactly when completeness is complete",
         )
+        changed, affected = set(self.changed_nodes), set(self.affected_nodes)
+        require(not changed & affected, "a node is either changed or affected, not both")
+        impact_set = changed | affected
+        require(set(self.related_tests) <= impact_set, "related tests must be changed or affected")
+        require(
+            set(self.public_interfaces) <= impact_set,
+            "public interfaces must be changed or affected",
+        )
+        require(
+            (self.classification is ImpactClass.NONE) == (not self.changed_nodes),
+            "classification is none exactly when nothing changed",
+        )
         explained = [explanation.node for explanation in self.explanations]
         sorted_unique(explained, "explanations")
         require(
-            set(self.affected_nodes) | set(self.related_tests) <= set(explained),
+            affected | set(self.related_tests) <= set(explained),
             "every affected node and related test needs an explanation",
+        )
+        require(
+            all(explanation.path[0] in changed for explanation in self.explanations),
+            "an explanation path starts at a changed node",
         )

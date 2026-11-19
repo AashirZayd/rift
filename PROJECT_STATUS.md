@@ -58,7 +58,7 @@ M4 — Impact — in progress on `m4/impact` (from `main` at `c192750`, which co
 
 ## Pending
 - M4 fresh-context review done (2026-11-19): 2 blockers, 7 major, 11 minor, 4 nits. Fix plan, in order (tick when committed with a test):
-  - [ ] #16 ImpactResult invariants (affected ∩ changed = ∅; related/public ⊆ changed ∪ affected; path[0] ∈ changed; none iff no changed nodes)
+  - [x] #16 ImpactResult invariants (affected ∩ changed = ∅; related/public ⊆ changed ∪ affected; path[0] ∈ changed; none iff no changed nodes)
   - [ ] #1/#12 classification by module-crossing dependency edges inside the impact set (monotone in the change set; Hypothesis property)
   - [ ] #3 module node starts the traversal only for module-level line changes or added/renamed/deleted files (ChangeMapping.starts)
   - [ ] #11 a class counts as changed only for its own lines (not its members' spans)

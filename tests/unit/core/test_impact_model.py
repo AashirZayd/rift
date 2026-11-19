@@ -66,6 +66,26 @@ def test_valid_result_round_trips() -> None:
             id="unexplained-affected-node",
         ),
         pytest.param({"unresolved": (_ref(2, "y"), _ref(1, "x"))}, id="unsorted-unresolved"),
+        pytest.param({"changed_nodes": (A, B)}, id="changed-and-affected"),
+        pytest.param(
+            {"public_interfaces": (NodeId("py:pkg.z:q"),)}, id="public-outside-impact-set"
+        ),
+        pytest.param(
+            {
+                "affected_nodes": (B, T, NodeId("test:tests/test_z.py::test_z")),
+                "related_tests": (T, NodeId("test:tests/test_z.py::test_z")),
+                "explanations": (
+                    ImpactExplanation(node=B, path=(A, B)),
+                    ImpactExplanation(node=T, path=(A, T)),
+                    ImpactExplanation(
+                        node=NodeId("test:tests/test_z.py::test_z"),
+                        path=(B, NodeId("test:tests/test_z.py::test_z")),
+                    ),
+                ),
+            },
+            id="path-not-from-a-changed-node",
+        ),
+        pytest.param({"classification": ImpactClass.NONE}, id="none-with-changes"),
         pytest.param(
             {
                 "completeness": Completeness.PARTIAL,
