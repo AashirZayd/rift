@@ -26,6 +26,11 @@ still change.
   - calls of a module object.
 
 ### Changed
+- Impact: a module path with any segment starting with `_` (dunders included) is never
+  public, so deleting `pkg/_internal.py`, a module under `pkg/_private/`, or
+  `pkg/__main__.py` is classified by its dependents, not as `public_api` (ADR-0010).
+- Impact: the `dynamic_code_in_project` message lists at most 50 files (sorted), then
+  `... and N more`.
 - Runtime dependency floors: `jsonschema>=4.0.1` (4.0.0 is yanked), `rich>=13.8.0`
   (ADR-0003 amendment).
 - Coverage threshold `fail_under = 85` is enforced.

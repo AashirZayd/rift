@@ -137,7 +137,8 @@
      reported as `related_tests`. A test-only change is `local`.
 8. **Public.**
    - A symbol is public when all of these hold:
-     - no segment of its module path is private (`_x`; dunders are public);
+     - no segment of its module path starts with `_` (dunders included: `pkg.__main__` is
+       not public; follow-up after M4). Nested qualname segments keep the dunder exception;
      - the analyzer reports its top-level ancestor as not private: `__all__` decides when it is
        a literal, otherwise leading underscores do;
      - no nested qualname segment is private or `<locals>`-style;
@@ -235,6 +236,17 @@ The first version:
   - a deleted public module path without public symbols was no longer `public_api`;
   - removed tests appeared as related tests;
   - the relaxed model invariant was broader than needed.
+
+### Follow-ups after M4 acceptance (user)
+
+- Deleting a module is `public_api` only if no segment of its dotted path starts with `_`. A
+  deleted `pkg/_internal.py`, anything under `pkg/_private/`, or `pkg/__main__.py` is classified
+  by its dependents like any other change. The rule is on the module path itself (`public_path`),
+  so it also covers the removed symbols of such a module, and a changed symbol in a dunder module
+  (e.g. `pkg/__main__.py`) is no longer `public_api` either. Pinned by
+  `test_deleted_module_is_public_api_only_without_an_underscore_segment`.
+- The `dynamic_code_in_project` message names at most the first 50 files (sorted), then
+  `... and N more`; the count of all files stays in the message.
 
 ## Alternatives considered
 

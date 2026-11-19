@@ -1,8 +1,8 @@
 # Project Status
-_Last updated: 2026-11-19 — by: Claude Code session (M4 user decisions, their review, gate)_
+_Last updated: 2026-11-19 — by: Claude Code session (M4 follow-ups on `m4/followups`)_
 
 ## Current milestone
-M4 — Impact — complete, awaiting review on `m4/impact` (not pushed) (from `main` at `c192750`, which contains PR #4, #5 `m3/graph` and #6 `m3/review-decisions`; user: CI green). M3 and the review decisions accepted by user 2026-11-19.
+M4 — Impact — accepted 2026-11-19 (merged to `main` as `691c16c`, CI green). M4 follow-ups on `m4/followups` (not pushed), awaiting merge: (1) a deleted module is `public_api` only if no dotted-path segment starts with `_`; (2) the `dynamic_code_in_project` message is capped at 50 sorted paths plus `... and N more` (ADR-0010, "Follow-ups after M4 acceptance"). Gate on the branch: 806 passed / 7 skipped / 1 xfailed, coverage 95.67%, ruff/mypy/lint-imports (8 kept) clean, build OK. M5 not started; awaits "followups merged".
 
 ## Completed (verified)
 ### M0 (accepted)
@@ -36,7 +36,7 @@ M4 — Impact — complete, awaiting review on `m4/impact` (not pushed) (from `m
 - §23 gate after review fixes: sync OK, format 130 files clean, ruff 0, mypy 0 issues in 108 files, lint-imports 8 kept / 0 broken, pytest 559 passed / 7 skipped / 1 xfailed, coverage 94.92% (fail_under 85), build OK
 - Post-acceptance fix (branch `m2/unresolved-calls`, ADR-0007 item 9a): calls through a local/parameter/assigned name (`cb = f; cb()`), a subscript or a call result were silently dropped; now `UnresolvedReference(reason=unknown)`; calling a module object likewise (plus a `references` edge to the module, found by the M3 review) — verified by `tests/unit/analysis/test_unresolved_calls.py`; gate on that branch: 571 passed / 7 skipped / 1 xfailed, coverage 95.00% (before the module-object follow-up, which is covered by the M3 gate)
 
-### M4 (awaiting review)
+### M4 (accepted 2026-11-19)
 - Analyzed file set = git (tracked + untracked-not-ignored) ∩ discovery, in `rift.services.analysis`; a `.gitignore`d venv (without `pyvenv.cfg`) and build output are never analyzed; force-added, deleted-tracked and nested-repo cases — verified by `tests/integration/services/test_analyzed_file_set.py` (real git, with a positive control)
 - §11 step 1 mapping: own-line intersection (class minus members), module node always changed and a traversal start only for module-level edits / added / renamed / type-changed / binary / removed symbols; removed symbols from an in-memory parse of the base side (`git.read_files_at` + `analysis.analyze_sources`); renamed under the new path; rename-out = deletion; deleted = file node only + `deleted_without_analysis`; exclusions on deleted paths; `.pyi` → `stub_not_analyzed` — verified by `tests/integration/services/test_impact.py` (add, modify, delete, rename, whitespace inside and between symbols, removed public function), `tests/unit/impact/test_review_regressions.py`, `tests/unit/impact/test_engine_details.py`
 - §11.1 classification by module-crossing dependencies inside the impact set, ordinal and monotone in the change set; one test per tier plus each neighbouring boundary; publicity via `__all__`/visibility and module path; default public packages under the source roots; test code (test files, conftest.py, tests/ and test/ dirs) excluded; no probability language (word-bounded scan with positive control) — verified by `tests/unit/impact/test_classification.py`, the monotonicity property in `test_review_regressions.py` (`HYPOTHESIS_PROFILE=ci`: passed)
