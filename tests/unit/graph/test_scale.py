@@ -4,7 +4,8 @@ recursion, even with the interpreter recursion limit pinned just above the curre
 import ast
 import sys
 import textwrap
-from collections.abc import Iterator
+from collections import Counter
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from types import FrameType
@@ -15,6 +16,7 @@ import rift.graph
 from rift.core.ids import NodeId
 from rift.core.models.graph import Confidence, Edge, EdgeKind, EdgeOrigin, Node, NodeKind
 from rift.graph.multigraph import DependencyGraph
+from rift.graph.traversal import breadth_first
 
 CHAIN = 100_000
 KINDS = tuple(EdgeKind)
@@ -116,20 +118,66 @@ def _cycle_heavy_pairs(size: int, clique: int) -> Iterator[tuple[int, int, EdgeK
 
 
 @pytest.mark.slow
-def test_cycle_heavy_graph_terminates_and_visits_each_node_once() -> None:
+def test_cycle_heavy_graph_terminates_with_bfs_layering() -> None:
     size, clique = 20_000, 200
     graph = _graph(size, _cycle_heavy_pairs(size, clique))
     assert graph.edge_count > 100_000
     with tight_recursion_limit():
         forward = graph.forward_reachable(_name(size - 1))
         reverse = graph.reverse_reachable(_name(0))
-    assert len(forward.nodes) == len(set(forward.nodes)) == size
-    assert len(reverse.nodes) == size
+    assert len(forward.nodes) == len(reverse.nodes) == size
     for result in (forward, reverse):
         for node in result.nodes:
             step = result.steps[node]
             if step is not None:  # BFS layering: a parent is exactly one hop closer
                 assert result.depth(node) == result.depth(step.previous) + 1
+
+
+class CountingAdjacency(Mapping[NodeId, Mapping[EdgeKind, Mapping[NodeId, Edge]]]):
+    """Counts how often each node's neighbours are fetched, i.e. how often it is expanded."""
+
+    def __init__(self, inner: Mapping[NodeId, Mapping[EdgeKind, Mapping[NodeId, Edge]]]) -> None:
+        self.inner = inner
+        self.expanded: Counter[NodeId] = Counter()
+
+    def __getitem__(self, key: NodeId) -> Mapping[EdgeKind, Mapping[NodeId, Edge]]:
+        self.expanded[key] += 1
+        return self.inner[key]
+
+    def __iter__(self) -> Iterator[NodeId]:
+        return iter(self.inner)
+
+    def __len__(self) -> int:
+        return len(self.inner)
+
+    def __contains__(self, key: object) -> bool:
+        return key in self.inner
+
+
+@pytest.mark.slow
+def test_cycle_heavy_traversal_expands_every_node_exactly_once() -> None:
+    size, clique = 20_000, 200
+    adjacency: dict[NodeId, dict[EdgeKind, dict[NodeId, Edge]]] = {
+        _name(i): {} for i in range(size)
+    }
+    for source, target, kind in _cycle_heavy_pairs(size, clique):
+        adjacency[_name(source)].setdefault(kind, {})[_name(target)] = Edge(
+            source=_name(source),
+            target=_name(target),
+            kind=kind,
+            origin=EdgeOrigin.NAME_RESOLUTION,
+            confidence=Confidence.CERTAIN,
+            evidence_ids=(),
+            flags=frozenset(),
+        )
+    counting = CountingAdjacency(adjacency)
+    with tight_recursion_limit():
+        result = breadth_first(
+            counting, _name(0), kinds=None, min_confidence=Confidence.UNKNOWN, max_depth=None
+        )
+    assert len(result.nodes) == size
+    assert set(counting.expanded.values()) == {1}
+    assert sum(counting.expanded.values()) == size
 
 
 def _functions(tree: ast.Module) -> Iterator[tuple[ast.FunctionDef | ast.AsyncFunctionDef, bool]]:
@@ -159,7 +207,8 @@ def _calls_itself(func: ast.FunctionDef | ast.AsyncFunctionDef, *, method: bool)
 
 
 def test_no_function_in_rift_graph_calls_itself() -> None:
-    """Static guard: no direct recursion anywhere in rift.graph."""
+    """Static guard: no direct recursion anywhere in rift.graph. Mutual recursion is not
+    detected; the iterative-only rule is also checked behaviourally by the deep-chain tests."""
     offenders = [
         f"{path.name}:{func.name}"
         for path in sorted(Path(rift.graph.__file__).parent.glob("*.py"))
