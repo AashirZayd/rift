@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from rift.analysis.python.modules import ModuleIndex
+from rift.analysis.python.naming import is_test_path
 from rift.analysis.python.scopes import (
     Binding,
     BindingKind,
@@ -202,12 +203,6 @@ def dotted(expr: ast.expr) -> str | None:
     if isinstance(root, ast.Name):
         return ".".join([root.id, *attrs])
     return None
-
-
-def _is_test_file(path: str) -> bool:
-    """pytest's default ``python_files = test_*.py *_test.py`` (static classification only)."""
-    name = path.rsplit("/", 1)[-1]
-    return name.startswith("test_") or name.endswith("_test.py")
 
 
 def _literal_strings(node: ast.expr | None) -> list[str] | None:
@@ -745,7 +740,7 @@ def walk_module(  # noqa: PLR0913  # keyword-only; each is a distinct input
         text=text,
         own=own,
         module_scope=module_scope,
-        is_test_file=_is_test_file(path),
+        is_test_file=is_test_path(path),
     )
     walker = Walker(facts, index)
     walker.body(tree.body, module_scope, frozenset())

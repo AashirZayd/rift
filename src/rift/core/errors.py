@@ -28,6 +28,7 @@ class ErrorCode(StrEnum):
     UNREADABLE_FILE = "unreadable_file"
     UNKNOWN_NODE = "unknown_node"
     GRAPH_CONFLICT = "graph_conflict"
+    SYMBOL_NOT_FOUND = "symbol_not_found"
 
 
 class RiftError(Exception):
