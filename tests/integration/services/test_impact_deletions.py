@@ -133,3 +133,77 @@ def test_rename_out_of_the_analyzed_set_uses_the_base_side(repo: GitRepo) -> Non
     assert "py:app.user:go" in impact.affected_nodes
     assert impact.classification is ImpactClass.PUBLIC_API
     assert _reasons(impact) == [("unresolved_reference", "missing_module")]
+
+
+_INTERNAL = "def visible():\n    return 1\n"
+
+
+@pytest.mark.parametrize(
+    ("files", "deleted", "expected"),
+    [
+        pytest.param(
+            {"src/pkg/__init__.py": "", "src/pkg/_internal.py": _INTERNAL},
+            ("src/pkg/_internal.py",),
+            ImpactClass.LOCAL,
+            id="private-module-no-dependents",
+        ),
+        pytest.param(
+            {
+                "src/pkg/__init__.py": "",
+                "src/pkg/_internal.py": _INTERNAL,
+                "src/other/__init__.py": "",
+                "src/other/use.py": (
+                    "from pkg._internal import visible\n\n\ndef run():\n    return visible()\n"
+                ),
+            },
+            ("src/pkg/_internal.py",),
+            ImpactClass.CROSS_PACKAGE,
+            id="private-module-dependent-in-another-package",
+        ),
+        pytest.param(
+            {
+                "src/pkg/__init__.py": "",
+                "src/pkg/_private/__init__.py": "",
+                "src/pkg/_private/impl.py": _INTERNAL,
+                "src/pkg/api.py": (
+                    "from pkg._private.impl import visible\n\n\ndef run():\n    return visible()\n"
+                ),
+            },
+            ("src/pkg/_private/impl.py",),
+            ImpactClass.MODULE,
+            id="module-under-private-package-dependent-in-same-package",
+        ),
+        pytest.param(
+            {
+                "src/pkg/__init__.py": "",
+                "src/pkg/_private/__init__.py": "",
+                "src/pkg/_private/impl.py": _INTERNAL,
+            },
+            ("src/pkg/_private/__init__.py", "src/pkg/_private/impl.py"),
+            ImpactClass.LOCAL,
+            id="whole-private-package-no-dependents",
+        ),
+        pytest.param(
+            {"src/pkg/__init__.py": "", "src/pkg/__main__.py": "def main():\n    return 0\n"},
+            ("src/pkg/__main__.py",),
+            ImpactClass.LOCAL,
+            id="dunder-segment-counts-as-underscore",
+        ),
+        pytest.param(
+            {"src/pkg/__init__.py": "", "src/pkg/impl.py": _INTERNAL},
+            ("src/pkg/impl.py",),
+            ImpactClass.PUBLIC_API,
+            id="control-public-path",
+        ),
+    ],
+)
+def test_deleted_module_is_public_api_only_without_an_underscore_segment(
+    repo: GitRepo, files: dict[str, str], deleted: tuple[str, ...], expected: ImpactClass
+) -> None:
+    """Follow-up 1: deleting a module is public_api only if no segment of its dotted path starts
+    with ``_``; otherwise it is classified by its dependents like any other change."""
+    base = _commit(repo, files)
+    for path in deleted:
+        (repo.root / path).unlink()
+    impact = _impact(repo, base)
+    assert impact.classification is expected
