@@ -1,8 +1,8 @@
 # Project Status
-_Last updated: 2026-11-19 — by: Claude Code session (M4 build)_
+_Last updated: 2026-11-19 — by: Claude Code session (M4 build, review fixes, gate)_
 
 ## Current milestone
-M4 — Impact — in progress on `m4/impact` (from `main` at `c192750`, which contains PR #4, #5 `m3/graph` and #6 `m3/review-decisions`; user: CI green). M3 and the review decisions accepted by user 2026-11-19.
+M4 — Impact — complete, awaiting review on `m4/impact` (not pushed) (from `main` at `c192750`, which contains PR #4, #5 `m3/graph` and #6 `m3/review-decisions`; user: CI green). M3 and the review decisions accepted by user 2026-11-19.
 
 ## Completed (verified)
 ### M0 (accepted)
@@ -36,8 +36,16 @@ M4 — Impact — in progress on `m4/impact` (from `main` at `c192750`, which co
 - §23 gate after review fixes: sync OK, format 130 files clean, ruff 0, mypy 0 issues in 108 files, lint-imports 8 kept / 0 broken, pytest 559 passed / 7 skipped / 1 xfailed, coverage 94.92% (fail_under 85), build OK
 - Post-acceptance fix (branch `m2/unresolved-calls`, ADR-0007 item 9a): calls through a local/parameter/assigned name (`cb = f; cb()`), a subscript or a call result were silently dropped; now `UnresolvedReference(reason=unknown)`; calling a module object likewise (plus a `references` edge to the module, found by the M3 review) — verified by `tests/unit/analysis/test_unresolved_calls.py`; gate on that branch: 571 passed / 7 skipped / 1 xfailed, coverage 95.00% (before the module-object follow-up, which is covered by the M3 gate)
 
-### M4 (in progress)
-- Checkpoint: analyzed file set (git ∩ discovery), `ImpactResult.limitations` model change, impact engine (mapping, traversal, classification, completeness, lookup), services, ADR-0010, `docs/architecture.md` committed; §23 gate green (740 passed / 7 skipped / 1 xfailed, coverage 95.51%) before the engine-detail tests. Fresh-context review pending.
+### M4 (awaiting review)
+- Analyzed file set = git (tracked + untracked-not-ignored) ∩ discovery, in `rift.services.analysis`; a `.gitignore`d venv (without `pyvenv.cfg`) and build output are never analyzed; force-added, deleted-tracked and nested-repo cases — verified by `tests/integration/services/test_analyzed_file_set.py` (real git, with a positive control)
+- §11 step 1 mapping: own-line intersection (class minus members), module node always changed and a traversal start only for module-level edits / added / renamed / type-changed / binary / removed symbols; removed symbols from an in-memory parse of the base side (`git.read_files_at` + `analysis.analyze_sources`); renamed under the new path; rename-out = deletion; deleted = file node only + `deleted_without_analysis`; exclusions on deleted paths; `.pyi` → `stub_not_analyzed` — verified by `tests/integration/services/test_impact.py` (add, modify, delete, rename, whitespace inside and between symbols, removed public function), `tests/unit/impact/test_review_regressions.py`, `tests/unit/impact/test_engine_details.py`
+- §11.1 classification by module-crossing dependencies inside the impact set, ordinal and monotone in the change set; one test per tier plus each neighbouring boundary; publicity via `__all__`/visibility and module path; default public packages under the source roots; test code (test files, conftest.py, tests/ and test/ dirs) excluded; no probability language (word-bounded scan with positive control) — verified by `tests/unit/impact/test_classification.py`, the monotonicity property in `test_review_regressions.py` (`HYPOTHESIS_PROFILE=ci`: passed)
+- Completeness orthogonal to the tier; every reason listed in `ImpactResult.limitations` (unresolved references touching the impact set, per reason with counts; analysis failures and skips anywhere; other analyzer limitations inside the impact set; deleted without analysis; stubs) — verified by `tests/unit/impact/test_completeness_and_tests.py`, `tests/unit/core/test_impact_model.py` (model invariants, incl. the review #16 ones)
+- related_tests = `test:` nodes in the impact set with explanation paths, honouring min_confidence and max_depth; tests of deleted/renamed modules reached through failed module-level imports — verified by `test_completeness_and_tests.py::test_related_tests_honour_min_confidence_with_paths`, `test_impact.py::test_deleted_module_is_a_file_node_only_and_partial`
+- `--symbol` resolution as a service (`services.impact.resolve_symbol`): full name > qualname > short name; ambiguous → all candidates sorted; not found → `SymbolNotFoundError(symbol_not_found)` with hint — verified by `tests/unit/impact/test_lookup.py`, `test_impact.py::test_symbol_and_path_services`
+- End to end with real git → exact tier, completeness, affected nodes, related tests and paths — verified by `test_impact.py::test_end_to_end_private_change_crossing_packages`; determinism under PYTHONHASHSEED 0 vs 4242 on a copy at another path — verified by `tests/contract/test_determinism.py::test_impact_results_are_byte_identical_across_hash_seeds`
+- Fresh-context review: 23 findings (2 blockers, 7 major, 10 minor, 4 nits); all fixed with tests except #9 (decision requested) — verified by `tests/unit/impact/test_review_regressions.py` (24 tests) and the updated suites
+- §23 gate after review fixes: sync OK, format 171 files clean, ruff 0, mypy 0 issues in 146 files, lint-imports 8 kept / 0 broken, pytest 782 passed / 7 skipped / 1 xfailed, coverage 95.69% (fail_under 85), build OK
 
 ### M3 review decisions (accepted 2026-11-19, PR #6)
 - Decision 1, restricting flags in the edge key: a `certain` TYPE_CHECKING import and a `likely` runtime import are both kept; traversal explains a hop with the strongest parallel edge (ties: smaller kind, then less restricted); SPEC §10 line, ADR-0009 §1/§6/§7/§10 — verified by `tests/unit/graph/test_merge.py` (`test_type_checking_and_runtime_edges_are_both_kept`, `test_traversal_explains_with_the_strongest_parallel_edge`), `tests/unit/graph/test_builder.py::test_type_checking_and_dynamic_runtime_imports_are_parallel_edges`, and the batch-rule and brute-force path properties in `tests/property/test_graph_properties.py`
@@ -57,19 +65,9 @@ M4 — Impact — in progress on `m4/impact` (from `main` at `c192750`, which co
 - Fresh-context review: 12 findings (1 major, 5 minor, 6 nit groups). Fixed: #1 merge inflation, #2 dangling collapse, #3 phantom nested test IDs, #4 filter validation, #5 strength-aware paths, #6b module-object calls, #7 folded self-loops, #8 doc paths, #9 from_dict wording, #10 pytest benchmark, #11 weak tests, #12 `Step` kw_only / `edge()` raising. Not changed: #6a `cls()`/`type(self)()` noise (SPEC-correct; noted in ADR-0007 9a for a decision), #12 `GraphBuild` unhashable (documented)
 
 ## Pending
-- M4 fresh-context review done (2026-11-19): 2 blockers, 7 major, 11 minor, 4 nits. Fix plan, in order (tick when committed with a test):
-  - [x] #16 ImpactResult invariants (affected ∩ changed = ∅; related/public ⊆ changed ∪ affected; path[0] ∈ changed; none iff no changed nodes)
-  - [ ] #1/#12 classification by module-crossing dependency edges inside the impact set (monotone in the change set; Hypothesis property)
-  - [ ] #3 module node starts the traversal only for module-level line changes or added/renamed/deleted files (ChangeMapping.starts)
-  - [ ] #11 a class counts as changed only for its own lines (not its members' spans)
-  - [ ] #4 publicity uses the analyzer's visibility (`__all__`) for the top-level ancestor; #5 default public packages = units of files under the source roots only; #6 test code = test files, conftest.py, files under tests/ or test/ directories
-  - [ ] #2 base-side snapshot of modified/renamed files (git blob → in-memory parse) to find removed symbols; removed public symbol → public_api; renamed public module → public_api; deleted file in a public package → public_api (deleted files stay file-node-only + partial per user rule)
-  - [ ] #7 rename to a non-analyzed path handled as a deletion of the old path; #13 deleted-module names via the analyzer's ModuleIndex naming; #14 exclusions apply to deleted paths
-  - [ ] #8 a failed module-level import links every symbol of the importing file (tests of deleted modules become related)
-  - [ ] #10 only failures/skips count globally; other analyzer limitations only when their file is in the impact set; #23 changed .pyi → limitation
-  - [ ] #15 map_nodes requires analyzed nodes; #17 validate public_packages; #18 anchor dict lookup, DependencyGraph.copy(), one ProjectIndex per call; #19 probability-language test with word boundaries over all impact modules; #20 CHANGELOG wording; #21 only py: dangling targets; #22 limitation-kind constants; #23 tests for copied/type_changed/binary/rename+modify/nested roots
-  - Open for the user: #9 `external_module` unresolved references make almost every result `partial` (SPEC-literal; kept as is, decision requested).
-- Then: final gate, report; user review.
+- User review of M4.
+- Decision requested (review #9): `external_module` unresolved references (every stdlib/third-party import) touch most impact sets, so most real results are `partial` (SPEC §11 literal). Options: keep; exclude `external_module` from completeness (it cannot hide internal dependents) but keep listing it in `unresolved`; or report it under a separate non-completeness limitation.
+- Decision offered: deleted files could also use the base-side snapshot (their symbols become known, no longer file-node-only + partial); kept file-node-only per the M4 rule.
 
 ## Release blockers (v0.1.0)
 - Revisit typer cap before v0.1.0 — accept transitive pydantic or keep cap + document isolated install (uv tool / pipx).
@@ -100,6 +98,7 @@ M4 — Impact — in progress on `m4/impact` (from `main` at `c192750`, which co
 - Discovery does not honour `.gitignore` (deterministic, independent of global excludes); exclusion config wiring is M7 (ADR-0008).
 - Read containment: check-then-open race narrowed by `(st_dev, st_ino)` comparison; residual on filesystems with unreliable inode numbers (ADR-0008).
 - Edges carry no evidence IDs until the evidence engine (M6).
+- Impact (ADR-0010): deleted files are file-node-only until the M5 cache (a public module path counts as public API); `external_module` references make most results `partial` (decision pending); unresolved references outside the impact set (e.g. `import_module(name)` elsewhere) can hide a dependent; test code recognised by path conventions only; head must be the working tree.
 - Graph (ADR-0009): no `tests`/containment edges (M4/M5); test IDs carry no parametrization; the graph is mutable during construction and read-only by convention only; the static recursion guard detects direct recursion only.
 
 ## Failing / xfail tests
@@ -109,8 +108,8 @@ M4 — Impact — in progress on `m4/impact` (from `main` at `c192750`, which co
 - None. Nothing from M4+ implemented (no impact classification, no test selection; no SQLite cache — deferred to M5 by ADR-0007 §29).
 
 ## Unverified
-- CI on GitHub for `m2/unresolved-calls` and `m3/graph` (not pushed). Only Windows + Python 3.11.9 was run locally.
-- M2: none — user reports CI green on GitHub for PR #3.
+- CI on GitHub for `m4/impact` (not pushed). Only Windows + Python 3.11.9 was run locally.
+- M2, M3: none — user reports CI green on GitHub for PRs #3–#6.
 - M1: none — user reports CI green on GitHub for PR #2, including `git-minimum` (git 2.30.2, which runs `tests/security/test_git_hardening.py::test_partial_clone_never_fetches_or_runs_transport_commands`) and `lowest-direct`.
 
 ## Architectural decisions (ADR index)
@@ -126,4 +125,5 @@ M4 — Impact — in progress on `m4/impact` (from `main` at `c192750`, which co
 - [ADR-0010](docs/adr/0010-impact-engine.md) — Analyzed file set (git ∩ discovery), working-tree head, change mapping and module anchors, ordinal classification ladder (dependents outside own modules, test code excluded), completeness reasons in `ImpactResult.limitations`, `--symbol` tiers
 
 ## Next tasks
-- Finish M4: review fixes, final gate, report. Then await "M4 accepted".
+- Await "M4 accepted" and the #9 decision.
+- M5 — Verification (§12; §24 M5): not started.
