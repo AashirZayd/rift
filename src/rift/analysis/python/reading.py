@@ -98,7 +98,7 @@ def _failed(path: str, sha: str, size: int, failure: ReadFailure) -> SourceFile:
     )
 
 
-def read_source(root: Path, path: str, *, max_bytes: int) -> SourceFile:  # noqa: PLR0911  # one exit per failure mode
+def read_source(root: Path, path: str, *, max_bytes: int) -> SourceFile:
     """Read ``root / path`` (``path`` is repo-relative POSIX) and parse it."""
     full = root / path
     empty_sha = hashlib.sha256(b"").hexdigest()
@@ -127,6 +127,27 @@ def read_source(root: Path, path: str, *, max_bytes: int) -> SourceFile:  # noqa
         return SourceFile(
             path=path, sha256=sha, size=size, oversized=True, text=None, tree=None, failure=None
         )
+    return _from_data(path, sha, size, data)
+
+
+def source_from_bytes(path: str, data: bytes, *, max_bytes: int) -> SourceFile:
+    """Parse in-memory ``data`` as the file ``path`` (e.g. a blob of the base revision), with the
+    same size limit, decoding and parsing as :func:`read_source`. Nothing is written or run."""
+    sha = hashlib.sha256(data).hexdigest()
+    if len(data) > max_bytes:
+        return SourceFile(
+            path=path,
+            sha256=sha,
+            size=len(data),
+            oversized=True,
+            text=None,
+            tree=None,
+            failure=None,
+        )
+    return _from_data(path, sha, len(data), data)
+
+
+def _from_data(path: str, sha: str, size: int, data: bytes) -> SourceFile:
     text_or_failure = _decode(data)
     if isinstance(text_or_failure, ReadFailure):
         return _failed(path, sha, size, text_or_failure)
