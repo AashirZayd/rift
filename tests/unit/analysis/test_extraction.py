@@ -537,7 +537,9 @@ def test_scoping_rules(tmp_path: Path) -> None:
     # The parameter shadows the function: no edge to it at any confidence.
     assert not {c for c in calls if c[:2] == ("py:m:shadowed", "py:m:target")}
     assert ("py:m:C.method", "py:m:target", "certain") in calls  # class scope is skipped
-    assert unresolved(result) == set()  # late (global), x, y are all bound
+    # late (global), x, y are all bound; only the call through the parameter is unknown
+    # (ADR-0007 item 9a: an unresolvable call is recorded, never dropped).
+    assert unresolved(result) == {("unknown", "target")}
 
 
 # --------------------------------------------------------------------------- inputs

@@ -26,6 +26,8 @@ class ErrorCode(StrEnum):
     UNEXPECTED_GIT_OUTPUT = "unexpected_git_output"
     MISSING_OBJECTS = "missing_objects"
     UNREADABLE_FILE = "unreadable_file"
+    UNKNOWN_NODE = "unknown_node"
+    GRAPH_CONFLICT = "graph_conflict"
 
 
 class RiftError(Exception):

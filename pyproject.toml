@@ -83,6 +83,9 @@ ignore = [
     "S607",    # fixture builders run the real `git` from PATH, independently of rift.git
     "PLR2004", # literal expected values are clearer than named constants in assertions
 ]
+"benchmarks/**" = [
+    "S101",    # pytest-based benchmarks (SPEC §4): assert is the pytest idiom
+]
 
 [tool.ruff.lint.isort]
 known-first-party = ["rift"]
@@ -90,7 +93,7 @@ known-first-party = ["rift"]
 # ---------------------------------------------------------------- mypy
 [tool.mypy]
 python_version = "3.11"
-files = ["src", "tests"]
+files = ["src", "tests", "benchmarks"]
 mypy_path = "src"
 strict = true
 warn_unreachable = true

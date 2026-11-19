@@ -2,9 +2,9 @@
 
 **Proof-carrying changes for modern software.**
 
-> **Status: pre-alpha (milestone M2: Python static analyzer).** The only working commands are
-> `rift --help` and `rift version`. The git layer, the core models and the static Python
-> analyzer are internal libraries with no CLI surface yet. Everything described under
+> **Status: pre-alpha (milestone M3: dependency graph).** The only working commands are
+> `rift --help` and `rift version`. The git layer, the core models, the static Python analyzer
+> and the dependency graph are internal libraries with no CLI surface yet. Everything described under
 > "What RIFT will do" is planned, not implemented. Nothing has been released to PyPI.
 
 ## What RIFT will do
@@ -45,8 +45,8 @@ uv run rift version
 |---|---|---|
 | M0 | Foundation: packaging, tooling, CI, layering contracts | done |
 | M1 | Core models, canonical JSON, hardened git layer | done |
-| M2 | Python static analyzer | in progress |
-| M3 | Dependency graph | planned |
+| M2 | Python static analyzer | done |
+| M3 | Dependency graph | in progress |
 | M4 | Impact engine | planned |
 | M5 | Verification (pytest discovery, planning, execution) | planned |
 | M6 | Change Proof protocol, evidence, policy, invariants | planned |
