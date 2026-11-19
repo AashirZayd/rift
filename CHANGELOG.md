@@ -12,8 +12,9 @@ The Change Proof protocol is first published in M6; until then, model vocabulari
 still change.
 - `NodeKind.constant` (SPEC §6.3): module-level constants are graph nodes, not folded into
   their module (ADR-0009 §13).
-- `ImpactResult.limitations` (SPEC §6.4): every reason an impact result is not complete is listed;
-  it is empty exactly when `completeness=complete`. `ImpactResult` also now requires sorted
+- `ImpactResult.limitations` (SPEC §6.4): every reason an impact result is not complete is listed
+  (a `partial` or `unknown` result has at least one), plus informational entries such as
+  `dynamic_code_in_project`. `ImpactResult` also now requires sorted
   `unresolved`/`limitations` and an explanation for every affected node and related test
   (ADR-0010).
 
@@ -37,8 +38,10 @@ still change.
   - the ordinal SPEC §11.1 classification as made precise by ADR-0010, i.e. module-crossing
     dependencies inside the impact set (monotone in the change set; never a risk
     probability);
-  - removed symbols found from an in-memory parse of the base side of modified and renamed
-    files;
+  - removed symbols found from an in-memory parse of the base side of modified, renamed and
+    deleted files;
+  - `external_module` references are listed but do not make a result `partial` (a project's own
+    top-level names are never external);
   - completeness with every reason listed;
   - related tests with explanation paths;
   - `--symbol` resolution (exact names win; an ambiguous name returns every candidate).
@@ -46,6 +49,8 @@ still change.
   discovery, so `.gitignore`d venvs and build output are never analyzed
   (`rift.git.files.list_worktree_files`, `rift.services.analysis`).
 - `docs/architecture.md`: the layers and the impact pipeline.
+- SPEC §31 and README: a roadmap of planned additions (an offline HTML proof report, a GitHub
+  Action, a separate dashboard). Planned only; not implemented.
 - Dependency graph (M3, ADR-0009): `rift.graph.multigraph.DependencyGraph`, a custom in-memory
   directed multigraph with bidirectional adjacency.
   - An edge's key is `(source, kind, target, restricting flags)`: edges that differ only in

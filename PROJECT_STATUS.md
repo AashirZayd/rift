@@ -72,6 +72,10 @@ M4 — Impact — complete, awaiting review on `m4/impact` (not pushed) (from `m
 ## Release blockers (v0.1.0)
 - Revisit typer cap before v0.1.0 — accept transitive pydantic or keep cap + document isolated install (uv tool / pipx).
 
+## M5 checklist
+(Recorded only; not implemented before M5.)
+- Prefix heuristic: an f-string or concatenation import whose literal prefix matches a changed module's package makes the result partial and triggers full-suite.
+
 ## M6 checklist
 (Recorded only; not implemented before M6.)
 - Enforce sorted collections in the models (deferred M1 review item): require sorted order (or document the key) for `ChangeProof.limitations`, `Evidence.limitations`, `ProofVerification.runs`, `VerificationPlan.reasons` (§7.2).
@@ -79,6 +83,15 @@ M4 — Impact — complete, awaiting review on `m4/impact` (not pushed) (from `m
 - `core.excludesFile` makes untracked-file detection and the analyzed file set (ADR-0010 §1) machine-dependent (a §7 risk). Decide with an ADR: ignore global excludes, or record a hash of them in the environment block.
 - jsonschema floor 4.0.1: if M6 needs cross-file `$ref` via the `referencing` API (4.18+), raise the floor in an ADR (amend ADR-0003) rather than keeping two code paths.
 - Accept and preserve `x-` extension keys in decoding (§16).
+
+## M7 checklist
+(Recorded only; not implemented before M7.)
+- --base/--head comparing two commits that aren't checked out must fail with a structured error (or be supported); never return a result computed from the working tree.
+- `rift proof export --format html`: a single self-contained offline HTML report (verdict, changes, impact, tests, evidence, limitations); no server, no external assets, no CDN JS (SPEC §31, planned).
+
+## M8 checklist
+(Recorded only; not implemented before M8.)
+- A GitHub Action that posts a proof summary as a PR comment (SPEC §31, planned).
 
 ## M9 checklist
 - Fill CoC contact (`CODE_OF_CONDUCT.md` reporting placeholder).

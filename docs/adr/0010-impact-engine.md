@@ -29,9 +29,11 @@
      The M6 ADR decides that for both.
 2. **Head is the working tree.** Analysis reads files from disk, so impact runs from the base to
    the working tree (staged, unstaged, untracked); the base comes from SPEC §8. The **base side**
-   of modified, renamed and type-changed `.py` files is read from git objects
+   of modified, renamed, type-changed and deleted `.py` files is read from git objects
    (`git.read_files_at`: literal pathspecs, no fetching) and parsed in memory
-   (`analysis.analyze_sources`, never executed), only to find removed symbols (4).
+   (`analysis.analyze_sources`, never executed), only to find removed symbols (4). Comparing two
+   commits that are not checked out is not supported. On the M7 checklist: it must fail with a
+   structured error (or be supported), never return a result computed from the working tree.
 
 ### Mapping changes to nodes (§11 step 1, `rift.impact.mapping`)
 
@@ -67,9 +69,12 @@
    - **Added / copied / binary**: every symbol is changed.
    - **Renamed**: the same rules, under the new path. A rename to a path that is not analyzed is
      handled as a deletion of the old path.
-   - **Deleted `.py`**: `file:<path>` only, with reason `deleted_without_analysis`: there is no
-     cache before M5, and the user's M4 rule keeps deleted files file-node-only. Deleted paths
-     that the exclusions match map to nothing, like their modifications.
+   - **Deleted `.py`** (decided by the user after the M4 review): every node of the file's
+     base-side analysis, i.e. its module node and all its symbols, so a deleted public symbol is
+     public API removed. Only if the base side cannot be parsed (no blob, a parse or decode
+     failure, oversized) does it fall back to `file:<path>`, with reason
+     `deleted_without_analysis`. Deleted paths that the exclusions match map to nothing, like
+     their modifications.
    - **`.pyi`**: stubs are not analyzed (ADR-0007), so a changed stub adds reason
      `stub_not_analyzed`.
    - **Whitespace-only edits** count as changes; RIFT does not guess which edits are
@@ -113,7 +118,7 @@
 
      | Tier | Rule |
      |---|---|
-     | `public_api` | a changed or removed symbol is public in a public package, or a deleted or moved-away file with a public module path lies in a public package (its symbols are unknown, so they are assumed public) |
+     | `public_api` | a changed or removed symbol is public in a public package, or a deleted or moved-away file whose base side could not be parsed has a public module path in a public package (its symbols are unknown, so they are assumed public) |
      | `cross_package` | the crossing dependencies' ends span two or more units |
      | `module` | some crossing dependency exists |
      | `local` | no crossing dependency |
@@ -140,28 +145,40 @@
 
 ### Completeness (§11, model change)
 
-9. `ImpactResult.limitations` lists every reason the result is not complete. The model enforces
-   that it is empty exactly when `completeness=complete`. Reasons (kind constants live in
-   `rift.impact.mapping` / `assess`):
+9. `ImpactResult.limitations` lists every reason the result is not complete, plus
+   informational entries that do not affect completeness. The model enforces that a `partial` or
+   `unknown` result lists at least one reason. Kind constants live in `rift.impact.mapping` and
+   `rift.impact.assess`. Reasons:
 
    | Kind | Subject | When |
    |---|---|---|
-   | `unresolved_reference` | the reason | at least one unresolved reference with that reason touches the impact set; the count is in the message, and the references are in `unresolved` |
+   | `unresolved_reference` | the reason | at least one unresolved reference with that reason touches the impact set; the count is in the message, and the references are in `unresolved`. `external_module` does **not** count (user decision): an external import cannot hide a project dependent. Guard: a reference whose top-level name is one of the project's own packages or modules (any source root) always counts, and a broken internal import is `missing_module` anyway |
    | `analysis_failed` | file path | the file has an error diagnostic (parse or decode failure), wherever it is |
    | `oversized_file` and discovery skips (`symlink_skipped`, ...) | path | the file was skipped, wherever it is |
    | other analyzer kinds (`non_literal_all`, `module_shadowed`, ...) | path | only when the file is in the impact set |
    | `deleted_without_analysis` | file path | a deleted file had no prior analysis |
    | `stub_not_analyzed` | file path | a changed `.pyi` |
 
+   Informational (does not affect completeness):
+
+   | Kind | Subject | When |
+   |---|---|---|
+   | `dynamic_code_in_project` | none | some file anywhere in the project has a non-literal dynamic import or code loading (`dynamic_import`, `module_getattr`, `sys_path_mutation`, `exec_eval`). One entry; the message names the files, sorted |
+
+   On the M5 checklist: an f-string or concatenation import whose literal prefix matches a
+   changed module's package will make the result `partial` and trigger the full suite.
+
    - `unknown` is not produced in M4: analysis that cannot run raises a structured `RiftError`.
    - The model also requires:
+     - at least one limitation when the result is not `complete`;
      - sorted `unresolved` and `limitations`;
      - `test:` IDs in `related_tests`;
      - changed and affected nodes disjoint;
      - related tests and public interfaces inside the impact set;
      - an explanation for every affected node and related test, starting at a changed node;
      - `none` exactly when nothing changed.
-   - This is a pre-protocol change (SPEC §6.4, CHANGELOG).
+   - This is a pre-protocol change (SPEC §6.4, CHANGELOG). The first version required
+     `limitations` to be empty exactly when `complete`; that was relaxed for informational entries.
 
 ### `--symbol` (`rift.impact.lookup`) and services
 
@@ -198,15 +215,25 @@ The first version:
 - made unrelated non-failure limitations global (now 9);
 - treated a method edit as an edit of its class (now 4).
 
+### Decisions after M4 review (user)
+
+- `external_module` references do not affect completeness, with the project-name guard (9).
+- Deleted files use the base-side parse; the file-node-only fallback is only for a base side that
+  cannot be parsed (4).
+- Project-wide non-literal dynamic imports are reported once, informationally (9). The
+  prefix heuristic is on the M5 checklist.
+
 ## Alternatives considered
 
 - **Discovery alone (M2) as the file set.** Rejected: it analyzes ignored venvs and build
   output.
 - **Dependents relative to every changed module** (the first version). Rejected: not monotone
   (7).
-- **Re-analyzing deleted files from the base side** as well. Possible with the same snapshot,
-  but the user's M4 rule keeps deleted files file-node-only until the M5 cache. It is listed as
-  a decision for later.
+- **Deleted files as file nodes only until the M5 cache** (the first version). Superseded by
+  the user: the base-side parse gives their symbols without a cache.
+- **`external_module` makes the result `partial`** (the SPEC §11 literal reading). Rejected by
+  the user: almost every real result would be `partial`, and an external import cannot hide a
+  project dependent.
 - **Count test code as dependents.** Rejected: almost every tested change would become
   `cross_package`.
 - **Mark the result `partial` for every dynamic import anywhere in the project.** Rejected for
@@ -227,16 +254,16 @@ Pinned by:
 - `tests/unit/impact/test_engine_details.py`;
 - `tests/unit/impact/test_review_regressions.py`: every review finding, plus the monotonicity
   property;
+- `tests/unit/impact/test_user_decisions.py`: stdlib and third-party imports, a broken internal
+  import, the project-name guard, the dynamic-code entry;
 - `tests/unit/core/test_impact_model.py`;
 - `tests/contract/test_determinism.py`: PYTHONHASHSEED 0 vs 4242, on a copy at another path.
 
 Known limitations:
-- A deleted file's own symbols are unknown until the M5 cache. A public module path is assumed
-  to be public API.
-- `external_module` references (every third-party or stdlib import) touch most impact sets, so
-  most real results are `partial`. That follows SPEC §11 literally; a decision is pending with
-  the user.
+- If a deleted file's base side cannot be parsed, its symbols are unknown, and a public module
+  path is assumed to be public API.
 - An unresolved reference outside the impact set (e.g. `import_module(name)` elsewhere) can hide
-  a dependent without making the result `partial`.
+  a dependent without making the result `partial`. It is reported by the informational
+  `dynamic_code_in_project` entry; the M5 prefix heuristic will narrow this.
 - Test code is recognised by path conventions only.
 - Head must be the working tree.

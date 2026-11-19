@@ -700,3 +700,15 @@ When a requirement cannot be met: stop, report the blocker with evidence, propos
 - Whether cache lands in M2 or M5 (M2 design note).
 - Windows process-group kill semantics for timeouts (M5).
 - Hostname/user inclusion in environment block — default off (M6).
+
+## 31. ROADMAP (planned, not implemented)
+
+Planned additions. They are not part of any milestone's acceptance criteria until the
+milestone starts, and none of them exists yet.
+
+- **M7**: `rift proof export --format html`. A single, self-contained, offline HTML report of a
+  Change Proof: verdict, changes, impact, tests, evidence, limitations. No server, no external
+  assets, no JavaScript from a CDN.
+- **M8**: a GitHub Action that posts a proof summary as a pull-request comment.
+- **Post-v0.1**: a web dashboard that reads proof JSON, as a separate project. It is not part of
+  this repository.

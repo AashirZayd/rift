@@ -55,6 +55,14 @@ uv run rift version
 | M8 | Plugin system | planned |
 | M9 | v0.1.0 release | planned |
 
+Planned additions (see [SPEC §31](docs/SPEC.md); none of these exists yet):
+
+- **M7 (planned)**: `rift proof export --format html`, a self-contained offline HTML report. No
+  server, no external assets.
+- **M8 (planned)**: a GitHub Action that posts a proof summary as a pull-request comment.
+- **Post-v0.1 (planned)**: a web dashboard that reads proof JSON, as a separate project outside
+  this repository.
+
 Current state is tracked in [`PROJECT_STATUS.md`](PROJECT_STATUS.md); design decisions in
 [`docs/adr/`](docs/adr/).
 
