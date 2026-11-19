@@ -1,8 +1,8 @@
 # Project Status
-_Last updated: 2026-11-18 — by: Claude Code session (M2 post-acceptance fix, M3 build)_
+_Last updated: 2026-11-19 — by: Claude Code session (M2 post-acceptance fixes, M3 build, review fixes, gate)_
 
 ## Current milestone
-M3 — Dependency graph — in progress on `m3/graph` (stacked on `m2/unresolved-calls`; neither pushed). M2 accepted by user 2026-11-18 (CI green, PR #3 merged).
+M3 — Dependency graph — complete, awaiting review on `m3/graph` (stacked on `m2/unresolved-calls`; neither pushed). M2 accepted by user 2026-11-18 (CI green, PR #3 merged).
 
 ## Completed (verified)
 ### M0 (accepted)
@@ -34,13 +34,20 @@ M3 — Dependency graph — in progress on `m3/graph` (stacked on `m2/unresolved
 - Determinism: AnalysisResults byte-identical under PYTHONHASHSEED 0 vs 4242 (second run on a copy at a different absolute path) with a set-order positive control; real results round-trip `to_dict`/`from_dict` — verified by `tests/contract/test_determinism.py`
 - Fresh-context review: 13 findings (1 blocker, 3 major, 7 minor, 2 nit groups) all fixed with regression tests — verified by `tests/unit/analysis/test_review_regressions.py` (20 passed, 1 skipped on Windows)
 - §23 gate after review fixes: sync OK, format 130 files clean, ruff 0, mypy 0 issues in 108 files, lint-imports 8 kept / 0 broken, pytest 559 passed / 7 skipped / 1 xfailed, coverage 94.92% (fail_under 85), build OK
-- Post-acceptance fix (branch `m2/unresolved-calls`, ADR-0007 item 9a): calls through a local/parameter/assigned name (`cb = f; cb()`), a subscript or a call result were silently dropped; now `UnresolvedReference(reason=unknown)` — verified by `tests/unit/analysis/test_unresolved_calls.py`; gate: 571 passed / 7 skipped / 1 xfailed, coverage 95.00%
+- Post-acceptance fix (branch `m2/unresolved-calls`, ADR-0007 item 9a): calls through a local/parameter/assigned name (`cb = f; cb()`), a subscript or a call result were silently dropped; now `UnresolvedReference(reason=unknown)`; calling a module object likewise (plus a `references` edge to the module, found by the M3 review) — verified by `tests/unit/analysis/test_unresolved_calls.py`; gate on that branch: 571 passed / 7 skipped / 1 xfailed, coverage 95.00% (before the module-object follow-up, which is covered by the M3 gate)
 
-### M3 (in progress)
-- Checkpoint: graph core, builder, unit/scale/property/determinism tests, benchmark, ADR-0009 committed; §23 gate green (644 passed / 7 skipped / 1 xfailed, coverage 95.44%). Fresh-context review pending.
+### M3 (awaiting review)
+- `rift.graph.multigraph.DependencyGraph`: custom in-memory directed multigraph, bidirectional `node -> kind -> neighbour -> edge` adjacency, imports only `rift.core` (layers contract), no new dependencies; dangling edges rejected with `GraphError`; sorted queries; strict, deterministic `to_dict`/`from_dict` — verified by `tests/unit/graph/test_multigraph.py`
+- Duplicate-edge rule (ADR-0009 §6): grouped by restricting flags, least-restricted group wins, strongest confidence + unioned provenance and evidence within it; never inflates confidence across contexts; order-free — verified by `tests/unit/graph/test_merge.py` and the batch-rule property in `tests/property/test_graph_properties.py`
+- Iterative level-by-level BFS, `forward_reachable`/`reverse_reachable` with validated `kinds`, `min_confidence`, `max_depth`; sorted results; explanation path = fewest weak edges, then lexicographically smallest — verified by `tests/unit/graph/test_multigraph.py` and brute-force Hypothesis check (incl. `max_depth`); mutations of cost, cross-level rank and kind tie-break each confirmed to fail the suite
+- No recursion: 100k-node chain (forward, reverse, path reconstruction, max_depth) and a 20k-node / >100k-edge cycle-heavy graph under a recursion limit pinned ~40 frames above the caller (positive control: a recursive walk raises), each node expanded exactly once (counted), static no-direct-recursion guard with positive control — verified by `tests/unit/graph/test_scale.py`
+- Hypothesis: transitivity, forward/reverse symmetry, round-trip, insertion-order independence, merge rule, monotonic `min_confidence`/kinds/`max_depth` — verified by `tests/property/test_graph_properties.py` (`HYPOTHESIS_PROFILE=ci`, 500 examples: 8 passed, before the review fixes; default profile in the final gate)
+- Builder from real M2 output: §6.3 IDs, collectable tests → `test:` nodes (every enclosing class `Test*`), constants folded into modules without self-loops, edges keep origin/confidence/flags, dangling edges kept whole in `GraphBuild.dangling` and recorded as `UnresolvedReference` (`raw` = `"<kind> <target>"`), analyzer unresolved carried over renamed, input-order independent — verified by `tests/unit/graph/test_builder.py`
+- Determinism: graph, unresolved and every node's forward/reverse explanations byte-identical under PYTHONHASHSEED 0 vs 4242 at different absolute paths, with set-order positive control — verified by `tests/contract/test_determinism.py::test_graph_and_traversal_are_byte_identical_across_hash_seeds`
+- Benchmark `benchmarks/test_graph_build.py` (pytest-based, not in `testpaths`; `uv run pytest benchmarks --no-cov -s`); numbers only in the completion report
+- Fresh-context review: 12 findings (1 major, 5 minor, 6 nit groups). Fixed: #1 merge inflation, #2 dangling collapse, #3 phantom nested test IDs, #4 filter validation, #5 strength-aware paths, #6b module-object calls, #7 folded self-loops, #8 doc paths, #9 from_dict wording, #10 pytest benchmark, #11 weak tests, #12 `Step` kw_only / `edge()` raising. Not changed: #6a `cls()`/`type(self)()` noise (SPEC-correct; noted in ADR-0007 9a for a decision), #12 `GraphBuild` unhashable (documented)
 
 ## Pending
-- Fresh-context review of M3, fixes, final gate, report.
 - User review of `m2/unresolved-calls` and M3.
 
 ## Release blockers (v0.1.0)
@@ -76,6 +83,8 @@ M3 — Dependency graph — in progress on `m3/graph` (stacked on `m2/unresolved
 - Discovery does not honour `.gitignore` (deterministic, independent of global excludes); exclusion config wiring is M7 (ADR-0008).
 - Read containment: check-then-open race narrowed by `(st_dev, st_ino)` comparison; residual on filesystems with unreliable inode numbers (ADR-0008).
 - Edges carry no evidence IDs until the evidence engine (M6).
+- Graph (ADR-0009): constants fold into their module node (no `constant` NodeKind in v0.1; revisit in M6); a merged edge keeps only the least-restricted context, so a `certain` TYPE_CHECKING occurrence beside a `likely` runtime one is not visible as `certain`; no `tests`/containment edges (M4/M5); test IDs carry no parametrization; the graph is mutable during construction and read-only by convention only; the static recursion guard detects direct recursion only.
+- Analyzer noise (ADR-0007 9a): `cls()` in classmethods and `type(self)()` are recorded as `unknown`.
 
 ## Failing / xfail tests
 - `tests/contract/test_schema_mirror.py::test_expected_schemas_exist_in_both_locations_byte_identical` — `xfail(strict=True)`, ADR-0003: no schemas until M6; remove the marker then.
@@ -100,4 +109,5 @@ M3 — Dependency graph — in progress on `m3/graph` (stacked on `m2/unresolved
 - [ADR-0009](docs/adr/0009-dependency-graph.md) — Graph storage, duplicate-edge merge (provenance flags unioned, restricting flags intersected), iterative BFS with lexicographically smallest shortest paths, builder (test nodes, constants folded into modules, missing targets → unresolved)
 
 ## Next tasks
-- Finish M3: review fixes, final gate, report. Then await "M3 accepted".
+- Await "M3 accepted" (and review of `m2/unresolved-calls`).
+- M4 — Impact (§11): not started.
