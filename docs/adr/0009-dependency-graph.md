@@ -12,7 +12,7 @@ returning sorted results and shortest explanation paths, a duplicate-edge rule, 
 deterministic serialization. It leaves open:
 - how flags merge;
 - which shortest path is reported when several exist;
-- how M2 symbols map onto the §6.3 node vocabulary, which has no `constant` kind;
+- how M2 symbols map onto the §6.3 node vocabulary (which first had no `constant` kind);
 - what happens to an edge whose target is not a node.
 
 ## Decision
@@ -114,14 +114,13 @@ deterministic serialization. It leaves open:
       `py:` function or method node. (The analyzer marks a method as a test from its innermost
       class only.)
     - symbol nodes carry `attributes = {symbol_kind, visibility}`.
-13. **Constants** have no `NodeKind` in v0.1, and adding one would change the protocol
-    vocabulary. A constant folds into its module node, and an edge to `py:m:CONST` becomes an edge
-    to `py:m`.
-    - This is coarser but conservative: every dependant of the constant is still a dependant of
-      its module.
-    - A self-loop that only folding creates (a module using its own constant, `B = A + 1`) is not
-      stored: a module trivially depends on itself.
-    - To revisit when the vocabularies are finalized in M6.
+13. **Constants** are `constant` nodes (`py:<module>:<NAME>`, label = the name), so a change
+    to a constant's line has a node of its own. Their users reach them through the analyzer's
+    `references` edges: from the function that reads them, or from the module for a module-level
+    use (`B = A + 1` gives `py:m -> py:m:A`). The user approved adding `NodeKind.constant` after
+    M3, as a pre-protocol vocabulary change (SPEC §6.3; the protocol is first published in M6).
+
+    The first version had no such kind and folded constants into their module node.
 14. **Edges** keep their kind, origin, confidence, flags and evidence IDs; only the endpoints
     renamed in 12–13 change. An edge whose target is not a node is **never dropped**:
     - it is kept whole, unmerged, in `GraphBuild.dangling` (sorted by `edge_sort_key`), so a
@@ -149,7 +148,7 @@ The first version was reviewed before acceptance. Changes:
   a `possible` edge when a `certain` path of the same length existed.
 - **12** requires every enclosing class to be a `Test*` class. Before, `Helper::TestInner::test_x`
   produced a test ID pytest cannot run.
-- **13** dropped folded self-loops.
+- **13** dropped folded self-loops (moot since constants became nodes; see the next section).
 - **14** added `dangling` and the kind in `raw`. Several dangling edges used to collapse into one
   record.
 
@@ -164,7 +163,8 @@ The first version was reviewed before acceptance. Changes:
 - **`add_edge` returning `False` for a dangling edge.** Rejected: callers could ignore it and
   drop the edge.
 - **Store the full path per reached node.** Rejected: quadratic memory on deep chains.
-- **Add `NodeKind.constant`.** Deferred: it changes the protocol vocabulary and needs approval.
+- **Fold constants into their module node** (the first version). Superseded once
+  `NodeKind.constant` was approved: folding is coarser and loses the constant's own span.
 - **Drop edges to constants, or record them as unresolved.** Rejected: they are resolved, so
   either choice would misreport them.
 
@@ -182,7 +182,6 @@ Pinned by:
 - `tests/contract/test_determinism.py`: PYTHONHASHSEED 0 vs 4242.
 
 Known limitations:
-- Constants are folded into module nodes (13).
 - Test node IDs carry no parametrization and are split at the first `::` (ADR-0005).
 - Merging keeps only the least-restricted context. A `certain` `TYPE_CHECKING` occurrence next
   to a `likely` runtime one is not visible as `certain` anywhere in the graph (6).

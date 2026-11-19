@@ -7,10 +7,8 @@ Nodes:
   without parameters), but only where pytest can collect them: every enclosing class must be a
   ``Test*`` class and there must be no ``<locals>``. Otherwise the symbol stays a ``py:`` method or
   function node;
-- constants have no :class:`NodeKind` in v0.1. They fold into their module node, and an edge to
-  ``py:m:CONST`` becomes an edge to ``py:m``. That is coarser, but every dependant of the constant
-  is still a dependant of its module. A self-loop that only folding creates (the module using its
-  own constant) is not stored: a module trivially depends on itself.
+- module-level constants become ``constant`` nodes; their users reach them through the analyzer's
+  ``references`` edges.
 
 Edges keep their kind, origin, confidence, flags and evidence IDs; only endpoints renamed above
 change. An edge whose target is not a node is never dropped:
@@ -46,6 +44,7 @@ _NODE_KINDS: Mapping[SymbolKind, NodeKind] = MappingProxyType(
         SymbolKind.CLASS: NodeKind.CLASS,
         SymbolKind.FUNCTION: NodeKind.FUNCTION,
         SymbolKind.METHOD: NodeKind.METHOD,
+        SymbolKind.CONSTANT: NodeKind.CONSTANT,
         SymbolKind.TEST_FUNCTION: NodeKind.FUNCTION,  # unless it becomes a test node
         SymbolKind.TEST_METHOD: NodeKind.METHOD,  # unless it becomes a test node
     }
@@ -114,7 +113,6 @@ def build_graph(results: Iterable[AnalysisResult]) -> GraphBuild:
     ordered = sorted(results, key=lambda result: result.file_path)
     graph = DependencyGraph()
     renamed: dict[NodeId, NodeId] = {}
-    folded: set[NodeId] = set()
     seen_paths: set[str] = set()
     for result in ordered:
         if result.file_path in seen_paths:
@@ -131,10 +129,6 @@ def build_graph(results: Iterable[AnalysisResult]) -> GraphBuild:
             )
         )
         for symbol in result.symbols:
-            if symbol.kind is SymbolKind.CONSTANT:
-                renamed[NodeId(symbol.id)] = module_node_id(symbol.module)
-                folded.add(NodeId(symbol.id))
-                continue
             node = _symbol_node(symbol)
             graph.add_node(node)
             if node.id != str(symbol.id):
@@ -146,8 +140,6 @@ def build_graph(results: Iterable[AnalysisResult]) -> GraphBuild:
         for edge in result.edges:
             source = renamed.get(edge.source, edge.source)
             target = renamed.get(edge.target, edge.target)
-            if edge.target in folded and source == target:
-                continue  # a module using its own constant: trivially self-dependent
             moved = (
                 edge
                 if (source, target) == (edge.source, edge.target)

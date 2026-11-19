@@ -7,6 +7,12 @@ separately (see `docs/SPEC.md` §16).
 
 ## [Unreleased]
 
+### Pre-protocol vocabulary changes
+The Change Proof protocol is first published in M6; until then, model vocabularies may
+still change.
+- `NodeKind.constant` (SPEC §6.3): module-level constants are graph nodes, not folded into
+  their module (ADR-0009 §13).
+
 ### Fixed
 - Analyzer: these calls are now recorded as `unknown` unresolved references instead of being
   dropped (ADR-0007 item 9a):
@@ -32,7 +38,7 @@ separately (see `docs/SPEC.md` §16).
   - Deterministic, strict `to_dict` / `from_dict`.
   - `rift.graph.builder.build_graph(results)` turns M2 `AnalysisResult`s into the graph:
     - collectable test functions and methods become `test:` nodes;
-    - constants fold into their module;
+    - module-level constants are `constant` nodes;
     - an edge to a missing node is kept in `dangling` and recorded as an
       `UnresolvedReference`.
 - `benchmarks/test_graph_build.py`: a pytest-based benchmark that builds the graph for a

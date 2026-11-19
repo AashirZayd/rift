@@ -1,6 +1,6 @@
 """ADR-0009: building the graph from real M2 analysis results.
 
-Covers node kinds and IDs, test nodes, constant folding, edge attributes kept, missing targets
+Covers node kinds and IDs, test nodes, constant nodes, edge attributes kept, missing targets
 turned into unresolved references (never dropped), carried-over unresolved references, and
 independence from input order.
 """
@@ -91,6 +91,7 @@ def test_every_file_and_symbol_becomes_a_node_of_the_right_kind(built: GraphBuil
         "py:pkg": NodeKind.MODULE,
         "py:pkg.a": NodeKind.MODULE,
         "py:pkg.c": NodeKind.MODULE,
+        "py:pkg.c:LIMIT": NodeKind.CONSTANT,
         "py:pkg.m": NodeKind.MODULE,
         "py:pkg.m:Engine": NodeKind.CLASS,
         "py:pkg.m:Engine.go": NodeKind.METHOD,
@@ -144,8 +145,8 @@ def test_edges_keep_origin_confidence_and_flags_and_are_renamed(built: GraphBuil
         "likely",
         frozenset(),
     ) in edges
-    # The constant folds into its module.
-    assert ("py:pkg.m:f", "references", "py:pkg.c", name_res, certain, frozenset()) in edges
+    # A constant is its own node, referenced by its user.
+    assert ("py:pkg.m:f", "references", "py:pkg.c:LIMIT", name_res, certain, frozenset()) in edges
     # Heuristic name match survives with its origin and confidence.
     assert (
         "py:pkg.m:g",
@@ -160,7 +161,6 @@ def test_edges_keep_origin_confidence_and_flags_and_are_renamed(built: GraphBuil
     stored = built.graph.edge(n("py:pkg.m"), EdgeKind.IMPORTS, n("py:pkg"))
     assert stored is not None
     assert EdgeFlag.TYPE_CHECKING_ONLY not in stored.flags
-    assert not any(node.id.startswith("py:pkg.c:") for node in built.graph.nodes())
 
 
 def test_analyzer_unresolved_references_carry_over_renamed(built: GraphBuild) -> None:
@@ -250,7 +250,6 @@ def test_empty_input_builds_an_empty_graph() -> None:
 RENAMED = {
     "py:tests.test_x:TestA.test_b": "test:tests/test_x.py::TestA::test_b",
     "py:tests.test_x:test_c": "test:tests/test_x.py::test_c",
-    "py:pkg.c:LIMIT": "py:pkg.c",
 }
 
 
@@ -299,8 +298,10 @@ def test_nested_test_classes_become_test_nodes_only_when_collectable(tmp_path: P
     assert not any("Helper" in node_id and node_id.startswith("test:") for node_id in kinds)
 
 
-def test_folding_a_module_own_constant_adds_no_self_loop(tmp_path: Path) -> None:
-    """Review finding #7: ``B = A + 1`` at module level is not stored as py:m -> py:m."""
+def test_constants_are_nodes_referenced_by_their_users(tmp_path: Path) -> None:
+    """Review decision 2: module-level constants are ``constant`` nodes; a module-level use
+    (``B = A + 1``) is a ``references`` edge from the module, a function's use from the
+    function."""
     build = _build(
         tmp_path,
         {
@@ -308,9 +309,16 @@ def test_folding_a_module_own_constant_adds_no_self_loop(tmp_path: Path) -> None
             "pkg/m.py": "A = 1\nB = A + 1\ndef f():\n    return A\n",
         },
     )
-    loops = [e for e in build.graph.edges() if e.source == e.target]
-    assert loops == []
-    assert build.graph.edge(n("py:pkg.m:f"), EdgeKind.REFERENCES, n("py:pkg.m")) is not None
+    graph = build.graph
+    for name in ("A", "B"):
+        node = graph.node(n(f"py:pkg.m:{name}"))
+        assert (node.kind, node.label) == (NodeKind.CONSTANT, name)
+        assert dict(node.attributes)["symbol_kind"] == "constant"
+    assert graph.edge(n("py:pkg.m"), EdgeKind.REFERENCES, n("py:pkg.m:A")) is not None
+    assert graph.edge(n("py:pkg.m:f"), EdgeKind.REFERENCES, n("py:pkg.m:A")) is not None
+    assert [e for e in graph.edges() if e.source == e.target] == []
+    users = graph.reverse_reachable(n("py:pkg.m:A"), kinds={EdgeKind.REFERENCES})
+    assert users.nodes == (n("py:pkg.m"), n("py:pkg.m:A"), n("py:pkg.m:f"))
 
 
 def test_type_checking_import_does_not_inflate_a_dynamic_runtime_import(tmp_path: Path) -> None:

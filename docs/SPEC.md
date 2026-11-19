@@ -198,7 +198,7 @@ Minimum fields below; implementers may add fields, never remove these without an
 - `SourceLocation(path: str, start_line: int, start_col: int, end_line: int, end_col: int)`
 
 ### 6.3 Graph
-- `NodeKind`: `file | module | class | function | method | test | api_contract`
+- `NodeKind`: `file | module | class | function | method | constant | test | api_contract` (`constant`: a module-level constant, §9.2)
 - `EdgeKind`: `imports | calls | inherits | references | tests | depends_on`
 - `EdgeOrigin`: `ast_static | name_resolution | heuristic | config_declared | plugin`
 - `Confidence`: `certain | likely | possible | unknown` — ordinal enum, **not** floats (floats invite fake precision and break determinism).

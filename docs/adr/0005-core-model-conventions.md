@@ -28,8 +28,9 @@ enum vocabularies and a few semantics unspecified.
    yet.
 4. **Node IDs** follow the §6.3 grammar exactly: `file:<path>`, `py:<module>[:<qualname>]`,
    `test:<path>::...`. Refinements:
-   - The ID prefix must agree with `NodeKind`. `api_contract` has no grammar in v0.1, so it may use
-     any valid ID form.
+   - The ID prefix must agree with `NodeKind`. `class`, `function`, `method` and `constant`
+     (added after M3) need `py:<module>:<qualname>`. `api_contract` has no grammar in v0.1, so it
+     may use any valid ID form.
    - Qualname segments may be the CPython markers `<locals>`, `<lambda>`, and so on.
    - Limitation: a test ID is split at the **first** `::`, so a test path that contains `::` or ends
      in `:` cannot be represented faithfully (`":" + "::A" == ":::A"`). Such an ID is rejected when
