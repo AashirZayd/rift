@@ -31,23 +31,27 @@ git (detect_changes, list_worktree_files)
 ```
 
 1. **Map** each changed file and its line ranges to nodes:
-   - symbols whose span intersects the changed lines, plus the file's module node (or its file
-     node);
-   - every symbol of an added file;
-   - renamed files under their new path;
+   - symbols whose own lines intersect the changed lines (for a class, its lines minus its
+     members'), plus the file's module node;
+   - the module node starts the traversal only for module-level edits or added, renamed or
+     binary files;
+   - removed symbols, found from an in-memory parse of the base side;
    - a deleted file as its `file:` node only. The result is then `partial`, since there is no
      cache before M5.
-2. **Link** references that no longer resolve but name a changed or removed module to that
-   module's changed node, at `likely`. That is how deleting or renaming a module or symbol reaches
-   its users.
+2. **Link** references that no longer resolve but name a changed or removed module or symbol to
+   its node, at `likely`. A failed module-level import links every symbol of the importing file.
 3. **Traverse** reverse dependencies, honouring `min_confidence` and `max_depth`. Every reached
    node gets the shortest explanation path: fewest weak edges first, then the smallest node IDs.
 4. **Collect** related tests (the `test:` nodes reached), public interfaces, and the unresolved
    references whose source is in the impact set.
-5. **Classify** on the exact ladder `none < local < module < cross_package < public_api`.
-   Dependents count only outside the changed nodes' own modules, and test code never counts.
-6. **Completeness** is orthogonal to the tier. Every reason is listed: unresolved references
-   touching the impact set, files that could not be analyzed, deleted files without prior
-   analysis.
+5. **Classify** on the ladder `none < local < module < cross_package < public_api`. The rungs are
+   decided by dependency edges inside the impact set that cross a module boundary, so more
+   changed nodes never give a lower tier. Test code never counts.
+6. **Completeness** is orthogonal to the tier. Every reason is listed:
+   - unresolved references touching the impact set;
+   - files that could not be analyzed;
+   - deleted files without prior analysis;
+   - changed stubs.
 
-The head of a change is always the working tree, because analysis reads files from disk.
+The head of a change is always the working tree, because analysis reads files from disk. The
+base side of modified and renamed files is read from git objects only to find removed symbols.

@@ -34,7 +34,11 @@ still change.
   - changed lines map to nodes (symbols whose span intersects them, plus the module
     node; deleted files as their file node);
   - reverse traversal with `min_confidence` / `max_depth`;
-  - the exact ordinal SPEC §11.1 classification (never a risk probability);
+  - the ordinal SPEC §11.1 classification as made precise by ADR-0010, i.e. module-crossing
+    dependencies inside the impact set (monotone in the change set; never a risk
+    probability);
+  - removed symbols found from an in-memory parse of the base side of modified and renamed
+    files;
   - completeness with every reason listed;
   - related tests with explanation paths;
   - `--symbol` resolution (exact names win; an ambiguous name returns every candidate).
