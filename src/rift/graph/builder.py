@@ -68,11 +68,8 @@ def pytest_node_of(symbol: Symbol) -> NodeId | None:
     """The pytest node ID of a test symbol, or ``None`` if pytest could not collect it: pytest
     descends only into ``Test*`` classes, and never into functions (``<locals>``)."""
     parts = symbol.qualname.split(".")
-    if symbol.kind not in _TEST_KINDS or any(
-        part.startswith("<") or not part.startswith("Test") for part in parts[:-1]
-    ):
-        return None
-    if parts[-1].startswith("<"):
+    # A "<locals>" segment fails the Test* check too: it is never a class pytest enters.
+    if symbol.kind not in _TEST_KINDS or not all(part.startswith("Test") for part in parts[:-1]):
         return None
     return node_id_for_test(f"{symbol.location.path}::{'::'.join(parts)}")
 
