@@ -11,9 +11,10 @@ Which shortest path explains a node? Among all shortest qualifying paths from an
 2. a remaining tie goes to the **lexicographically smallest** path, compared as a sequence of
    node IDs from the start.
 
-Each hop uses the strongest qualifying edge between its two nodes, with ties going to the
-smaller kind value. The cost is additive, so the BFS computes this exactly, level by level, from
-each node's own best path. Hypothesis checks it against brute force.
+Each hop uses the strongest qualifying edge between its two nodes, parallel edges included
+(ADR-0009 §6). Ties go to the smaller kind value, then to the less-restricted edge. The cost is
+additive, so the BFS computes this exactly, level by level, from each node's own best path.
+Hypothesis checks it against brute force.
 """
 
 from collections.abc import Iterable, Mapping
@@ -22,16 +23,18 @@ from types import MappingProxyType
 
 from rift.core.errors import ErrorCode
 from rift.core.ids import NodeId
-from rift.core.models.graph import Confidence, Edge, EdgeKind
+from rift.core.models.graph import Confidence, Edge, EdgeFlag, EdgeKind
 from rift.graph.errors import GraphError
+from rift.graph.merge import restriction_key
 
-# node -> kind -> neighbour -> edge (forward: neighbour is the target; reverse: the source).
-Adjacency = Mapping[NodeId, Mapping[EdgeKind, Mapping[NodeId, Edge]]]
+# node -> kind -> neighbour -> restricting flags -> edge (forward: neighbour is the target;
+# reverse: the source). Parallel edges differ only in their restricting flags (ADR-0009 §6).
+Adjacency = Mapping[NodeId, Mapping[EdgeKind, Mapping[NodeId, Mapping[frozenset[EdgeFlag], Edge]]]]
 # (unknown, possible, likely) edge counts along a path; smaller is stronger.
 Cost = tuple[int, int, int]
 
 _ALL_KINDS = tuple(sorted(EdgeKind, key=lambda kind: kind.value))
-_NO_NEIGHBOURS: Mapping[NodeId, Edge] = MappingProxyType({})
+_NO_NEIGHBOURS: Mapping[NodeId, Mapping[frozenset[EdgeFlag], Edge]] = MappingProxyType({})
 _ZERO: Cost = (0, 0, 0)
 _EDGE_COST: Mapping[Confidence, Cost] = MappingProxyType(
     {
@@ -197,18 +200,24 @@ def breadth_first(
 
 
 def _best_edges(
-    by_kind: Mapping[EdgeKind, Mapping[NodeId, Edge]],
+    by_kind: Mapping[EdgeKind, Mapping[NodeId, Mapping[frozenset[EdgeFlag], Edge]]],
     wanted: tuple[EdgeKind, ...],
     floor: Confidence,
     visited: Mapping[NodeId, object],
 ) -> dict[NodeId, Edge]:
-    """Per unvisited neighbour, the strongest qualifying edge (ties: the smaller kind)."""
+    """Per unvisited neighbour, the strongest qualifying edge. Ties go to the smaller kind, then
+    to the less-restricted parallel edge: kinds and restriction sets are visited in that order,
+    and only a strictly stronger edge replaces the current one."""
     best: dict[NodeId, Edge] = {}
-    for kind in wanted:  # sorted by value, so on a tie the first (smaller) kind stays
-        for neighbour, edge in by_kind.get(kind, _NO_NEIGHBOURS).items():
-            if neighbour in visited or edge.confidence < floor:
+    for kind in wanted:  # sorted by value
+        for neighbour, parallel in by_kind.get(kind, _NO_NEIGHBOURS).items():
+            if neighbour in visited:
                 continue
-            current = best.get(neighbour)
-            if current is None or edge.confidence > current.confidence:
-                best[neighbour] = edge
+            for flags in sorted(parallel, key=restriction_key):
+                edge = parallel[flags]
+                if edge.confidence < floor:
+                    continue
+                current = best.get(neighbour)
+                if current is None or edge.confidence > current.confidence:
+                    best[neighbour] = edge
     return best

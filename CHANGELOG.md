@@ -28,10 +28,9 @@ still change.
 ### Added
 - Dependency graph (M3, ADR-0009): `rift.graph.multigraph.DependencyGraph`, a custom in-memory
   directed multigraph with bidirectional adjacency.
-  - Duplicate edges are grouped by their restricting flags (`type_checking_only`,
-    `conditional`). The least-restricted group wins and merges internally: strongest confidence,
-    unioned provenance flags and evidence IDs. A merged edge is never stronger than an occurrence
-    in its own context.
+  - An edge's key is `(source, kind, target, restricting flags)`: edges that differ only in
+    `type_checking_only` / `conditional` are kept in parallel. Duplicates of one key merge to the
+    strongest confidence, with provenance flags and evidence IDs unioned.
   - Iterative BFS `forward_reachable` / `reverse_reachable` with validated kind,
     `min_confidence` and `max_depth` filters and sorted results. Each reached node gets a
     shortest explanation path with the fewest weak edges, ties going to the smallest node IDs.

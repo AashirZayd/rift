@@ -156,11 +156,13 @@ def test_edges_keep_origin_confidence_and_flags_and_are_renamed(built: GraphBuil
         "possible",
         frozenset(),
     ) in edges
-    # The TYPE_CHECKING import of pkg merges with the runtime import of pkg (from pkg.c import):
-    # the dependency exists at runtime, so it is not type_checking_only.
-    stored = built.graph.edge(n("py:pkg.m"), EdgeKind.IMPORTS, n("py:pkg"))
-    assert stored is not None
-    assert EdgeFlag.TYPE_CHECKING_ONLY not in stored.flags
+    # The TYPE_CHECKING import of pkg and the runtime import of pkg (from pkg.c import) are
+    # parallel edges: restricting flags are part of the edge key (ADR-0009 §6).
+    parallel = built.graph.edges_between(n("py:pkg.m"), EdgeKind.IMPORTS, n("py:pkg"))
+    assert [frozenset(e.flags) for e in parallel] == [
+        frozenset(),
+        frozenset({EdgeFlag.TYPE_CHECKING_ONLY}),
+    ]
 
 
 def test_analyzer_unresolved_references_carry_over_renamed(built: GraphBuild) -> None:
@@ -321,9 +323,9 @@ def test_constants_are_nodes_referenced_by_their_users(tmp_path: Path) -> None:
     assert users.nodes == (n("py:pkg.m"), n("py:pkg.m:A"), n("py:pkg.m:f"))
 
 
-def test_type_checking_import_does_not_inflate_a_dynamic_runtime_import(tmp_path: Path) -> None:
-    """Review finding #1, from real analyzer output: certain TYPE_CHECKING import + likely
-    import_module("pkg.c") is stored as a likely runtime edge."""
+def test_type_checking_and_dynamic_runtime_imports_are_parallel_edges(tmp_path: Path) -> None:
+    """Review decision 1, from real analyzer output: a certain TYPE_CHECKING import and a likely
+    import_module("pkg.c") are both kept, each with its own confidence; nothing is inflated."""
     build = _build(
         tmp_path,
         {
@@ -338,6 +340,17 @@ def test_type_checking_import_does_not_inflate_a_dynamic_runtime_import(tmp_path
             """,
         },
     )
-    stored = build.graph.edge(n("py:pkg.m"), EdgeKind.IMPORTS, n("py:pkg.c"))
-    assert stored is not None
-    assert (stored.confidence, stored.flags) == (Confidence.LIKELY, frozenset({EdgeFlag.DYNAMIC}))
+    parallel = build.graph.edges_between(n("py:pkg.m"), EdgeKind.IMPORTS, n("py:pkg.c"))
+    assert [(e.confidence, frozenset(e.flags)) for e in parallel] == [
+        (Confidence.LIKELY, frozenset({EdgeFlag.DYNAMIC})),
+        (Confidence.CERTAIN, frozenset({EdgeFlag.TYPE_CHECKING_ONLY})),
+    ]
+    # Traversal sees both: the certain one explains the hop, and it still qualifies under a
+    # certain floor, where the likely runtime edge alone would not.
+    reach = build.graph.reverse_reachable(n("py:pkg.c"), kinds={EdgeKind.IMPORTS})
+    (step,) = reach.path_edges(n("py:pkg.m"))
+    assert step.flags == {EdgeFlag.TYPE_CHECKING_ONLY}
+    strict = build.graph.reverse_reachable(
+        n("py:pkg.c"), kinds={EdgeKind.IMPORTS}, min_confidence=Confidence.CERTAIN
+    )
+    assert n("py:pkg.m") in strict

@@ -297,6 +297,7 @@ Custom in-memory directed multigraph. No graph DB, no networkx.
 - API: `add_node`, `add_edge` (target must exist or be rejected → caller records unresolved), `successors`, `predecessors`, `reverse_reachable(start, kinds, min_confidence, max_depth=None)`, `forward_reachable(...)`, `subgraph(nodes)`, `to_dict()` / `from_dict()`.
 - Traversal: iterative BFS (no recursion — deep graphs must not hit the recursion limit), visited set, returns a sorted tuple plus the shortest path to each reached node (for explanations).
 - Duplicate edge (same source, kind, target): keep the strongest confidence; merge evidence IDs.
+- The restricting flags (`type_checking_only`, `conditional`) are part of that key: edges that differ only in them are kept as parallel edges, and traversal explains a hop with the strongest of them.
 - Property tests (Hypothesis): reachability is transitive; reverse(forward) symmetry; serialization round-trips; output identical across insertion orders.
 
 ---
