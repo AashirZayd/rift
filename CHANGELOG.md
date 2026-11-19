@@ -30,6 +30,18 @@ still change.
 - Coverage threshold `fail_under = 85` is enforced.
 
 ### Added
+- Impact engine (M4, ADR-0010; `rift.impact`, `rift.services.impact`):
+  - changed lines map to nodes (symbols whose span intersects them, plus the module
+    node; deleted files as their file node);
+  - reverse traversal with `min_confidence` / `max_depth`;
+  - the exact ordinal SPEC §11.1 classification (never a risk probability);
+  - completeness with every reason listed;
+  - related tests with explanation paths;
+  - `--symbol` resolution (exact names win; an ambiguous name returns every candidate).
+- Analyzed file set: git's tracked plus untracked-not-ignored files intersected with
+  discovery, so `.gitignore`d venvs and build output are never analyzed
+  (`rift.git.files.list_worktree_files`, `rift.services.analysis`).
+- `docs/architecture.md`: the layers and the impact pipeline.
 - Dependency graph (M3, ADR-0009): `rift.graph.multigraph.DependencyGraph`, a custom in-memory
   directed multigraph with bidirectional adjacency.
   - An edge's key is `(source, kind, target, restricting flags)`: edges that differ only in
