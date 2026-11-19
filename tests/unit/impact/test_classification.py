@@ -2,13 +2,14 @@
 neighbouring tiers (none|local, local|module, module|cross_package, cross_package|public_api).
 Tiers are ordinal; nothing here is a probability."""
 
+import re
 from pathlib import Path
 
 import pytest
 
 import rift.core.models.impact
-import rift.impact.assess
-import rift.impact.classify
+import rift.impact
+import rift.services.impact
 from rift.core.models.impact import ImpactClass
 from rift.impact.assess import ImpactSettings
 from tests.unit.impact.helpers import analyze, impact_of_change, modified
@@ -211,10 +212,28 @@ def test_test_only_change_is_local_and_the_test_is_related(tmp_path: Path) -> No
     assert result.related_tests == ("test:tests/test_core.py::test_it",)
 
 
+_PROBABILITY = re.compile(r"\b(probabilit\w*|risk\w*|scores?|scoring|likelihood)\b")
+_NEGATION = re.compile(r"\b(not|never|nothing|no)\b")
+
+
 def test_no_probability_language_in_the_impact_engine() -> None:
-    """The tier is ordinal: no code or docstring presents it as a risk probability or score."""
-    for module in (rift.impact.classify, rift.impact.assess, rift.core.models.impact):
-        source = Path(module.__file__ or "").read_text(encoding="utf-8").lower()
-        for line in source.splitlines():
-            if any(word in line for word in ("probabil", "risk", "score", "likelihood")):
-                assert any(neg in line for neg in ("not", "never", "nothing")), line
+    """The tier is ordinal: no code, docstring or service presents it as a risk probability or
+    score. Every impact module, the impact model and the impact service are scanned."""
+    files = [
+        *sorted(Path(rift.impact.__file__ or "").parent.glob("*.py")),
+        Path(rift.core.models.impact.__file__ or ""),
+        Path(rift.services.impact.__file__ or ""),
+    ]
+    assert len(files) > 5
+    for path in files:
+        for number, line in enumerate(path.read_text(encoding="utf-8").lower().splitlines(), 1):
+            if _PROBABILITY.search(line):
+                assert _NEGATION.search(line), f"{path.name}:{number}: {line.strip()}"
+
+
+def test_probability_scan_has_teeth() -> None:
+    """Positive control: the patterns flag a real claim and accept a negation."""
+    assert _PROBABILITY.search("the risk score of this change")
+    assert not _NEGATION.search("the risk score of this change")
+    assert _NEGATION.search("an ordinal tier, not a risk probability")
+    assert not _PROBABILITY.search("a scorecard of whiskers")  # word boundaries
