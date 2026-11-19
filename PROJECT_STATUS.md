@@ -57,7 +57,19 @@ M4 — Impact — in progress on `m4/impact` (from `main` at `c192750`, which co
 - Fresh-context review: 12 findings (1 major, 5 minor, 6 nit groups). Fixed: #1 merge inflation, #2 dangling collapse, #3 phantom nested test IDs, #4 filter validation, #5 strength-aware paths, #6b module-object calls, #7 folded self-loops, #8 doc paths, #9 from_dict wording, #10 pytest benchmark, #11 weak tests, #12 `Step` kw_only / `edge()` raising. Not changed: #6a `cls()`/`type(self)()` noise (SPEC-correct; noted in ADR-0007 9a for a decision), #12 `GraphBuild` unhashable (documented)
 
 ## Pending
-- M4: fresh-context review, fixes, final gate, report; then user review.
+- M4 fresh-context review done (2026-11-19): 2 blockers, 7 major, 11 minor, 4 nits. Fix plan, in order (tick when committed with a test):
+  - [ ] #16 ImpactResult invariants (affected ∩ changed = ∅; related/public ⊆ changed ∪ affected; path[0] ∈ changed; none iff no changed nodes)
+  - [ ] #1/#12 classification by module-crossing dependency edges inside the impact set (monotone in the change set; Hypothesis property)
+  - [ ] #3 module node starts the traversal only for module-level line changes or added/renamed/deleted files (ChangeMapping.starts)
+  - [ ] #11 a class counts as changed only for its own lines (not its members' spans)
+  - [ ] #4 publicity uses the analyzer's visibility (`__all__`) for the top-level ancestor; #5 default public packages = units of files under the source roots only; #6 test code = test files, conftest.py, files under tests/ or test/ directories
+  - [ ] #2 base-side snapshot of modified/renamed files (git blob → in-memory parse) to find removed symbols; removed public symbol → public_api; renamed public module → public_api; deleted file in a public package → public_api (deleted files stay file-node-only + partial per user rule)
+  - [ ] #7 rename to a non-analyzed path handled as a deletion of the old path; #13 deleted-module names via the analyzer's ModuleIndex naming; #14 exclusions apply to deleted paths
+  - [ ] #8 a failed module-level import links every symbol of the importing file (tests of deleted modules become related)
+  - [ ] #10 only failures/skips count globally; other analyzer limitations only when their file is in the impact set; #23 changed .pyi → limitation
+  - [ ] #15 map_nodes requires analyzed nodes; #17 validate public_packages; #18 anchor dict lookup, DependencyGraph.copy(), one ProjectIndex per call; #19 probability-language test with word boundaries over all impact modules; #20 CHANGELOG wording; #21 only py: dangling targets; #22 limitation-kind constants; #23 tests for copied/type_changed/binary/rename+modify/nested roots
+  - Open for the user: #9 `external_module` unresolved references make almost every result `partial` (SPEC-literal; kept as is, decision requested).
+- Then: final gate, report; user review.
 
 ## Release blockers (v0.1.0)
 - Revisit typer cap before v0.1.0 — accept transitive pydantic or keep cap + document isolated install (uv tool / pipx).
