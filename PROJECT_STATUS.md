@@ -1,5 +1,5 @@
 # Project Status
-_Last updated: 2026-11-19 — by: Claude Code session (M4 build, review fixes, gate)_
+_Last updated: 2026-11-19 — by: Claude Code session (M4 user decisions, their review, gate)_
 
 ## Current milestone
 M4 — Impact — complete, awaiting review on `m4/impact` (not pushed) (from `main` at `c192750`, which contains PR #4, #5 `m3/graph` and #6 `m3/review-decisions`; user: CI green). M3 and the review decisions accepted by user 2026-11-19.
@@ -45,7 +45,13 @@ M4 — Impact — complete, awaiting review on `m4/impact` (not pushed) (from `m
 - `--symbol` resolution as a service (`services.impact.resolve_symbol`): full name > qualname > short name; ambiguous → all candidates sorted; not found → `SymbolNotFoundError(symbol_not_found)` with hint — verified by `tests/unit/impact/test_lookup.py`, `test_impact.py::test_symbol_and_path_services`
 - End to end with real git → exact tier, completeness, affected nodes, related tests and paths — verified by `test_impact.py::test_end_to_end_private_change_crossing_packages`; determinism under PYTHONHASHSEED 0 vs 4242 on a copy at another path — verified by `tests/contract/test_determinism.py::test_impact_results_are_byte_identical_across_hash_seeds`
 - Fresh-context review: 23 findings (2 blockers, 7 major, 10 minor, 4 nits); all fixed with tests except #9 (decision requested) — verified by `tests/unit/impact/test_review_regressions.py` (24 tests) and the updated suites
-- §23 gate after review fixes: sync OK, format 171 files clean, ruff 0, mypy 0 issues in 146 files, lint-imports 8 kept / 0 broken, pytest 782 passed / 7 skipped / 1 xfailed, coverage 95.69% (fail_under 85), build OK
+- User decisions on M4 (2026-11-19), applied on `m4/impact`:
+  - `external_module` references stay in `unresolved` but do not affect completeness; guard: an import counts when its top-level name is the project's own (head or base side) or it names a changed/removed module (also by pytest short name) — verified by `tests/unit/impact/test_user_decisions.py` (stdlib, third-party, broken internal import, guard) and `tests/integration/services/test_impact_deletions.py::test_deleting_a_still_imported_top_level_module_is_partial_and_public_api`
+  - deleted files use the base-side parse (module node + symbols; a deleted public symbol or public module path is public API); partial only if the base side cannot be parsed — verified by `test_impact.py::test_deleted_module_maps_to_its_base_side_nodes`, `test_deleted_file_whose_base_side_does_not_parse_falls_back`, `test_impact_deletions.py` (re-export shim, `__init__.py`, oversized base blob, rename out, pytest-prepend helper, deleted test file)
+  - project-wide non-literal dynamic imports add one sorted informational `dynamic_code_in_project` entry naming the files, without affecting completeness; model: `complete` carries informational limitations only, `partial`/`unknown` needs a real reason — verified by `test_user_decisions.py::test_project_wide_dynamic_imports_add_one_informational_entry`, `tests/unit/core/test_impact_model.py`
+  - M5 and M7 checklist items recorded; SPEC §31 and README roadmap (planned only)
+- Fresh-context review of the decision changes: 11 findings (4 major, 4 minor, 3 nits); majors and minors fixed with real-git tests (control: the four major-finding tests fail on the pre-fix code); nits #10/#11 recorded as known limitations in ADR-0010
+- §23 gate after the decisions and their review fixes: sync OK, format 173 files clean, ruff 0, mypy 0 issues in 148 files, lint-imports 8 kept / 0 broken, pytest 798 passed / 7 skipped / 1 xfailed, coverage 95.66% (fail_under 85), build OK; `HYPOTHESIS_PROFILE=ci` properties + review regressions: 104 passed
 
 ### M3 review decisions (accepted 2026-11-19, PR #6)
 - Decision 1, restricting flags in the edge key: a `certain` TYPE_CHECKING import and a `likely` runtime import are both kept; traversal explains a hop with the strongest parallel edge (ties: smaller kind, then less restricted); SPEC §10 line, ADR-0009 §1/§6/§7/§10 — verified by `tests/unit/graph/test_merge.py` (`test_type_checking_and_runtime_edges_are_both_kept`, `test_traversal_explains_with_the_strongest_parallel_edge`), `tests/unit/graph/test_builder.py::test_type_checking_and_dynamic_runtime_imports_are_parallel_edges`, and the batch-rule and brute-force path properties in `tests/property/test_graph_properties.py`
@@ -65,9 +71,7 @@ M4 — Impact — complete, awaiting review on `m4/impact` (not pushed) (from `m
 - Fresh-context review: 12 findings (1 major, 5 minor, 6 nit groups). Fixed: #1 merge inflation, #2 dangling collapse, #3 phantom nested test IDs, #4 filter validation, #5 strength-aware paths, #6b module-object calls, #7 folded self-loops, #8 doc paths, #9 from_dict wording, #10 pytest benchmark, #11 weak tests, #12 `Step` kw_only / `edge()` raising. Not changed: #6a `cls()`/`type(self)()` noise (SPEC-correct; noted in ADR-0007 9a for a decision), #12 `GraphBuild` unhashable (documented)
 
 ## Pending
-- User review of M4.
-- Decision requested (review #9): `external_module` unresolved references (every stdlib/third-party import) touch most impact sets, so most real results are `partial` (SPEC §11 literal). Options: keep; exclude `external_module` from completeness (it cannot hide internal dependents) but keep listing it in `unresolved`; or report it under a separate non-completeness limitation.
-- Decision offered: deleted files could also use the base-side snapshot (their symbols become known, no longer file-node-only + partial); kept file-node-only per the M4 rule.
+- User review of M4 (including the applied decisions).
 
 ## Release blockers (v0.1.0)
 - Revisit typer cap before v0.1.0 — accept transitive pydantic or keep cap + document isolated install (uv tool / pipx).
@@ -111,7 +115,7 @@ M4 — Impact — complete, awaiting review on `m4/impact` (not pushed) (from `m
 - Discovery does not honour `.gitignore` (deterministic, independent of global excludes); exclusion config wiring is M7 (ADR-0008).
 - Read containment: check-then-open race narrowed by `(st_dev, st_ino)` comparison; residual on filesystems with unreliable inode numbers (ADR-0008).
 - Edges carry no evidence IDs until the evidence engine (M6).
-- Impact (ADR-0010): deleted files are file-node-only until the M5 cache (a public module path counts as public API); `external_module` references make most results `partial` (decision pending); unresolved references outside the impact set (e.g. `import_module(name)` elsewhere) can hide a dependent; test code recognised by path conventions only; head must be the working tree.
+- Impact (ADR-0010): a deleted file whose base side cannot be parsed is file-node-only (a public module path counts as public API); unresolved references outside the impact set (e.g. `import_module(name)` elsewhere) can hide a dependent — reported by the informational `dynamic_code_in_project` entry, M5 prefix heuristic pending; test code recognised by path conventions only; head must be the working tree; the base-side snapshot holds only the changed files (a shadowed base-side loser is named as the winner, conservatively); the `dynamic_code_in_project` message is unbounded.
 - Graph (ADR-0009): no `tests`/containment edges (M4/M5); test IDs carry no parametrization; the graph is mutable during construction and read-only by convention only; the static recursion guard detects direct recursion only.
 
 ## Failing / xfail tests
@@ -138,5 +142,5 @@ M4 — Impact — complete, awaiting review on `m4/impact` (not pushed) (from `m
 - [ADR-0010](docs/adr/0010-impact-engine.md) — Analyzed file set (git ∩ discovery), working-tree head, change mapping and module anchors, ordinal classification ladder (dependents outside own modules, test code excluded), completeness reasons in `ImpactResult.limitations`, `--symbol` tiers
 
 ## Next tasks
-- Await "M4 accepted" and the #9 decision.
+- Await "M4 accepted".
 - M5 — Verification (§12; §24 M5): not started.
