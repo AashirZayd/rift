@@ -124,7 +124,8 @@ def test_boundary_cross_package_public_api(tmp_path: Path) -> None:
 
 
 def test_public_packages_setting_limits_public_api(tmp_path: Path) -> None:
-    files = _project(**{"other/__init__.py": "", "other/use.py": USER_IN_OTHER})
+    uses_compute = "from pkg.core import compute\ndef run():\n    return compute()\n"
+    files = _project(**{"other/__init__.py": "", "other/use.py": uses_compute})
     assert _tier(tmp_path / "a", files, "pkg/core.py", 4, public_packages=("other",)) is (
         ImpactClass.CROSS_PACKAGE
     )

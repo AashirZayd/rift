@@ -57,13 +57,12 @@ def test_end_to_end_private_change_crossing_packages(project: tuple[GitRepo, str
     ]
     impact = outcome.impact
     assert impact.changed_nodes == ("py:app.core", "py:app.core:_helper")
+    # Only code that uses the changed symbol: a symbol-only edit does not make every importer of
+    # the module a dependent (ADR-0010 §4).
     assert impact.affected_nodes == (
-        "py:app.api",
         "py:app.api:handle",
         "py:app.core:compute",
-        "py:lib.util",
         "py:lib.util:run",
-        "py:tests.test_core",
         TEST,
     )
     assert impact.related_tests == (TEST,)
@@ -132,14 +131,22 @@ def test_deleted_module_is_a_file_node_only_and_partial(project: tuple[GitRepo, 
         ("deleted_without_analysis", "src/app/core.py"),
         ("unresolved_reference", "missing_module"),
     ]
-    # Code that still imports the deleted module reaches the change.
-    assert impact.affected_nodes == ("py:app.api", "py:lib.util", "py:tests.test_core")
-    assert {str(e.node): e.path for e in impact.explanations}["py:lib.util"] == (
-        "file:src/app/core.py",
+    # Code that still imports the deleted module reaches the change; a failed module-level
+    # import affects every symbol of the importing file, so the test is related (review #8).
+    assert impact.affected_nodes == (
         "py:app.api",
+        "py:app.api:handle",
         "py:lib.util",
+        "py:lib.util:run",
+        "py:tests.test_core",
+        TEST,
     )
-    assert impact.classification is ImpactClass.CROSS_PACKAGE
+    assert impact.related_tests == (TEST,)
+    paths = {str(e.node): e.path for e in impact.explanations}
+    assert paths[TEST] == ("file:src/app/core.py", TEST)
+    assert paths["py:lib.util"] == ("file:src/app/core.py", "py:app.api", "py:lib.util")
+    # Its public symbols are unknown without a cache, so a public module path counts as public.
+    assert impact.classification is ImpactClass.PUBLIC_API
 
 
 def test_renamed_module_maps_under_its_new_path(project: tuple[GitRepo, str]) -> None:
@@ -153,11 +160,13 @@ def test_renamed_module_maps_under_its_new_path(project: tuple[GitRepo, str]) ->
         "src/app/endpoints.py",
     )
     impact = outcome.impact
-    assert impact.changed_nodes == ("py:app.endpoints",)  # a pure rename changes no line
-    # lib.util still imports the old name: it reaches the renamed module.
-    assert impact.affected_nodes == ("py:lib.util",)
+    # No line changed, but the base side shows that public app.api:handle no longer exists at
+    # its old path (review #2): the rename removed public API.
+    assert impact.changed_nodes == ("py:app.api:handle", "py:app.endpoints")
+    # lib.util still imports the old name: it and its code reach the renamed module.
+    assert impact.affected_nodes == ("py:lib.util", "py:lib.util:run")
     assert _reasons(impact) == [("unresolved_reference", "missing_module")]
-    assert impact.classification is ImpactClass.CROSS_PACKAGE
+    assert impact.classification is ImpactClass.PUBLIC_API
 
 
 def test_non_source_and_ignored_changes_are_none(project: tuple[GitRepo, str]) -> None:

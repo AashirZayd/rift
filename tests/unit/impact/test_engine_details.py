@@ -12,7 +12,7 @@ from rift.core.models.graph import Confidence
 from rift.graph.builder import build_graph
 from rift.impact.assess import ImpactSettings, assess_impact
 from rift.impact.errors import ImpactError
-from rift.impact.index import ProjectIndex, module_name_for
+from rift.impact.index import ProjectIndex
 from rift.impact.mapping import map_changes, map_nodes, map_paths
 from tests.unit.impact.helpers import analyze, explanation, impact_of_change
 
@@ -91,17 +91,26 @@ def test_unanalyzed_path_and_unknown_node_are_structured_errors(tmp_path: Path) 
 
 
 @pytest.mark.parametrize(
-    ("path", "roots", "expected"),
+    ("path", "expected"),
     [
-        pytest.param("src/pkg/a.py", ("src",), "pkg.a", id="under-src"),
-        pytest.param("pkg/__init__.py", (".",), "pkg", id="repo-root"),
-        pytest.param("src/inner/pkg/a.py", ("src", "src/inner"), "pkg.a", id="most-specific-root"),
-        pytest.param("other/a.py", ("src",), None, id="outside-every-root"),
-        pytest.param("src/my-dir/a.py", ("src",), None, id="not-importable"),
+        pytest.param("src/pkg/gone.py", "pkg.gone", id="under-src"),
+        pytest.param("src/pkg/__init__.py", "pkg", id="package-init"),
+        pytest.param("tests/helpers.py", "tests.helpers", id="fallback-outside-roots"),
+        pytest.param("src/my-dir/a.py", None, id="not-importable"),
     ],
 )
-def test_module_name_for(path: str, roots: tuple[str, ...], expected: str | None) -> None:
-    assert module_name_for(path, roots) == expected
+def test_module_name_for_follows_the_analyzer(
+    tmp_path: Path, path: str, expected: str | None
+) -> None:
+    """Review #13: the name a deleted or moved file had is the analyzer's name for it."""
+    files: dict[str, str | bytes] = {
+        "src/pkg/__init__.py": "",
+        "src/pkg/a.py": "",
+        "tests/test_x.py": "",
+    }
+    index = ProjectIndex(analyze(tmp_path, files))
+    assert index.source_roots == ("src",)
+    assert index.module_name_for(path) == expected
 
 
 def test_locals_segment_is_never_public(tmp_path: Path) -> None:

@@ -1,46 +1,34 @@
-"""Facts about every node that impact needs: its file, module, top-level unit, whether it is a
-symbol, and whether it is test code (ADR-0010 §3)."""
+"""Facts about every node that impact needs (ADR-0010 §3): its file, module and unit, its
+symbol, whether it is test code, and whether it is public."""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
 from rift.analysis.python.analyzer import ProjectAnalysis
+from rift.analysis.python.modules import ModuleIndex
 from rift.analysis.python.naming import is_test_path
 from rift.core.errors import ErrorCode
 from rift.core.ids import NodeId, file_node_id, module_node_id
 from rift.core.models.analysis import AnalysisResult
-from rift.core.models.source import Symbol, SymbolKind
-from rift.discovery.source_roots import importable_name
+from rift.core.models.source import Symbol, SymbolKind, Visibility
+from rift.discovery.source_roots import REPO_ROOT
 from rift.graph.builder import pytest_node_of
 from rift.impact.errors import ImpactError
 
+_TEST_DIRECTORIES = frozenset({"tests", "test"})
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class NodeFacts:
-    """``unit`` is the top-level package of ``module``; a file without a module name is its own
-    unit (``file:<path>``). ``qualname`` and ``symbol`` are set for class, function, method,
-    constant and test nodes only."""
 
-    node: NodeId
-    path: str
-    module: str | None
-    unit: str
-    symbol: Symbol | None
-    is_test_code: bool
-
-    @property
-    def is_symbol(self) -> bool:
-        return self.symbol is not None
-
-    @property
-    def is_public(self) -> bool:
-        """No private segment in the module path or the qualname (``_x``; dunders are public),
-        no ``<locals>``-style segment, and not test code."""
-        if self.symbol is None or self.module is None or self.is_test_code:
-            return False
-        segments = [*self.module.split("."), *self.symbol.qualname.split(".")]
-        return not any(_is_private(segment) for segment in segments)
+def is_test_code_path(path: str) -> bool:
+    """Test code (ADR-0010 §7): a pytest test file (``test_*.py`` / ``*_test.py``), a
+    ``conftest.py``, or any file under a ``tests/`` or ``test/`` directory (helpers, factories,
+    fixtures)."""
+    parts = path.split("/")
+    return (
+        is_test_path(path)
+        or parts[-1] == "conftest.py"
+        or bool(_TEST_DIRECTORIES & set(parts[:-1]))
+    )
 
 
 def _is_private(segment: str) -> bool:
@@ -50,81 +38,175 @@ def _is_private(segment: str) -> bool:
     return segment.startswith("_") and not dunder
 
 
-def module_name_for(path: str, source_roots: Sequence[str]) -> str | None:
-    """The module name ``path`` has (or had) under ``source_roots``; ``None`` if not importable.
-    The most specific root containing the path wins."""
-    for root in sorted(source_roots, key=lambda r: (-len(r), r)):
-        if root == ".":
-            return importable_name(path)
-        if path.startswith(root + "/"):
-            return importable_name(path[len(root) + 1 :])
-    return None
+@dataclass(frozen=True, slots=True, kw_only=True)
+class NodeFacts:
+    """``unit`` is the top-level package of ``module``; a module-less file is its own unit
+    (``file:<path>``). ``symbol`` is set for class, function, method, constant and test nodes.
+    ``top_visibility`` is the analyzer's visibility of the symbol's top-level ancestor (it
+    honours ``__all__``). ``removed`` marks a node that exists only on the base side (a removed
+    symbol, or a deleted file's node)."""
+
+    node: NodeId
+    path: str
+    module: str | None
+    unit: str
+    symbol: Symbol | None
+    is_test_code: bool
+    under_source_roots: bool
+    top_visibility: Visibility | None = None
+    removed: bool = False
+
+    @property
+    def is_symbol(self) -> bool:
+        return self.symbol is not None
+
+    @property
+    def module_key(self) -> str:
+        return self.module if self.module is not None else f"file:{self.path}"
+
+    @property
+    def public_path(self) -> bool:
+        """The module path has no private segment, and the file is not test code."""
+        if self.module is None or self.is_test_code:
+            return False
+        return not any(_is_private(segment) for segment in self.module.split("."))
+
+    @property
+    def is_public(self) -> bool:
+        """A public symbol (ADR-0010 §8): a public module path, a top-level ancestor that the
+        analyzer reports as public (``__all__`` decides when present; dunders are public), and
+        no private or ``<locals>``-style nested segment."""
+        if self.symbol is None or not self.public_path:
+            return False
+        if self.top_visibility is Visibility.PRIVATE:
+            return False
+        return not any(_is_private(s) for s in self.symbol.qualname.split(".")[1:])
 
 
 def unit_of(module: str | None, path: str) -> str:
     return module.split(".", 1)[0] if module else f"file:{path}"
 
 
+def _symbol_facts(
+    result: AnalysisResult, *, under_roots: bool, removed: bool = False
+) -> list[NodeFacts]:
+    is_test = is_test_code_path(result.file_path)
+    unit = unit_of(result.module, result.file_path)
+    top = {s.qualname: s.visibility for s in result.symbols if "." not in s.qualname}
+    facts: list[NodeFacts] = []
+    for symbol in result.symbols:
+        if symbol.kind is SymbolKind.MODULE:
+            node, kept, visibility = module_node_id(symbol.module), None, None
+        else:
+            node = pytest_node_of(symbol) or NodeId(symbol.id)
+            kept, visibility = symbol, top.get(symbol.qualname.split(".", 1)[0])
+        facts.append(
+            NodeFacts(
+                node=node,
+                path=result.file_path,
+                module=result.module,
+                unit=unit,
+                symbol=kept,
+                is_test_code=is_test,
+                under_source_roots=under_roots,
+                top_visibility=visibility,
+                removed=removed,
+            )
+        )
+    return facts
+
+
 class ProjectIndex:
-    """Node facts for every analyzed file, plus facts derived from a path for files that are no
-    longer analyzed (a deleted file's ``file:`` node)."""
+    """Node facts for every analyzed file, extendable with base-side (removed) nodes."""
 
     def __init__(self, analysis: ProjectAnalysis) -> None:
         self.source_roots = analysis.source_roots
+        self._analyzed_paths = tuple(r.file_path for r in analysis.results)
+        modules = ModuleIndex(self._analyzed_paths, self.source_roots)
         facts: dict[NodeId, NodeFacts] = {}
         results: dict[str, AnalysisResult] = {}
         for result in analysis.results:
             results[result.file_path] = result
-            is_test = is_test_path(result.file_path)
-            unit = unit_of(result.module, result.file_path)
+            under_roots = not modules.is_fallback(result.file_path)
             own = file_node_id(result.file_path)
             facts[own] = NodeFacts(
                 node=own,
                 path=result.file_path,
                 module=result.module,
-                unit=unit,
+                unit=unit_of(result.module, result.file_path),
                 symbol=None,
-                is_test_code=is_test,
+                is_test_code=is_test_code_path(result.file_path),
+                under_source_roots=under_roots,
             )
-            for symbol in result.symbols:
-                node = pytest_node_of(symbol) or NodeId(symbol.id)
-                facts[node] = NodeFacts(
-                    node=node,
-                    path=result.file_path,
-                    module=result.module,
-                    unit=unit,
-                    symbol=None if symbol.kind is SymbolKind.MODULE else symbol,
-                    is_test_code=is_test,
-                )
-        self._facts: Mapping[NodeId, NodeFacts] = MappingProxyType(facts)
+            for fact in _symbol_facts(result, under_roots=under_roots):
+                facts[fact.node] = fact
+        self._facts: dict[NodeId, NodeFacts] = facts
         self.results: Mapping[str, AnalysisResult] = MappingProxyType(results)
 
+    def knows(self, node: NodeId) -> bool:
+        return node in self._facts
+
     def facts(self, node: NodeId) -> NodeFacts:
-        """Facts of an analyzed node, or of a ``file:`` node of a file that is gone."""
-        known = self._facts.get(node)
-        if known is not None:
-            return known
-        prefix, _, path = node.partition(":")
-        if prefix != "file":
-            raise ImpactError(f"no facts for node {node!r}", code=ErrorCode.UNKNOWN_NODE)
-        module = module_name_for(path, self.source_roots)
-        return NodeFacts(
+        try:
+            return self._facts[node]
+        except KeyError:
+            raise ImpactError(f"no facts for node {node!r}", code=ErrorCode.UNKNOWN_NODE) from None
+
+    def module_name_for(self, path: str) -> str | None:
+        """The module name the analyzer gives ``path`` among the analyzed files (fallback naming
+        and shadowing included): the name a deleted or moved file had."""
+        if path in self.results:
+            return self.results[path].module
+        return ModuleIndex([*self._analyzed_paths, path], self.source_roots).module_of(path)
+
+    def add_removed_file(self, path: str) -> NodeFacts:
+        """Facts for the ``file:`` node of a deleted (or moved-away) file."""
+        module = self.module_name_for(path)
+        node = file_node_id(path)
+        fact = NodeFacts(
             node=node,
             path=path,
             module=module,
             unit=unit_of(module, path),
             symbol=None,
-            is_test_code=is_test_path(path),
+            is_test_code=is_test_code_path(path),
+            under_source_roots=self._under_roots(path),
+            removed=True,
         )
+        self._facts.setdefault(node, fact)
+        return self._facts[node]
 
-    def own_node(self, result: AnalysisResult) -> NodeId:
-        """The node that stands for a file: its module node, or its file node if it has none."""
-        if result.module is not None:
-            return module_node_id(result.module)
-        return file_node_id(result.file_path)
+    def add_removed_symbols(self, base: AnalysisResult, keep: Iterable[NodeId]) -> list[NodeFacts]:
+        """Facts for base-side symbols of ``base`` whose nodes no longer exist, except ``keep``."""
+        kept = frozenset(keep)
+        added: list[NodeFacts] = []
+        for fact in _symbol_facts(
+            base, under_roots=self._under_roots(base.file_path), removed=True
+        ):
+            if fact.symbol is None or fact.node in self._facts or fact.node in kept:
+                continue
+            self._facts[fact.node] = fact
+            added.append(fact)
+        return added
+
+    def register(self, fact: NodeFacts) -> None:
+        """Add a removed node's facts (made by another index for the same analysis)."""
+        self._facts.setdefault(fact.node, fact)
+
+    def _under_roots(self, path: str) -> bool:
+        if REPO_ROOT in self.source_roots:
+            return True
+        return any(path.startswith(root + "/") for root in self.source_roots)
 
     def public_units(self) -> tuple[str, ...]:
-        """Default ``project.public_packages``: every top-level package of non-test code."""
+        """Default ``project.public_packages``: every top-level package of non-test code under
+        the source roots (SPEC §11.1)."""
         return tuple(
-            sorted({f.unit for f in self._facts.values() if f.module and not f.is_test_code})
+            sorted(
+                {
+                    f.unit
+                    for f in self._facts.values()
+                    if f.module and f.under_source_roots and not f.is_test_code and not f.removed
+                }
+            )
         )

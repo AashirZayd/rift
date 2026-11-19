@@ -82,7 +82,10 @@ def test_deleted_file_is_its_file_node_only_and_partial(tmp_path: Path) -> None:
     # The importer of the deleted module still reaches the change (likely link, ADR-0010 §5).
     assert "py:pkg.user" in result.affected_nodes
     assert explanation(result, "py:pkg.user") == ("file:pkg/gone.py", "py:pkg.user")
-    assert result.classification is ImpactClass.MODULE
+    # A failed module-level import affects all of the importer's code (review #8).
+    assert "py:pkg.user:go" in result.affected_nodes
+    # The deleted module's symbols are unknown; its public path makes it public API.
+    assert result.classification is ImpactClass.PUBLIC_API
 
 
 def test_every_reason_is_listed_together(tmp_path: Path) -> None:
