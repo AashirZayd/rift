@@ -22,7 +22,7 @@ from hypothesis import strategies as st
 from rift.core.canonical import canonical_json
 from rift.core.ids import NodeId
 from rift.core.models.graph import Confidence, Edge, EdgeFlag, EdgeKind, EdgeOrigin
-from rift.graph.merge import restriction_key
+from rift.graph.merge import EdgeKey, edge_key, restriction_key, restrictions
 from rift.graph.multigraph import DependencyGraph
 from rift.graph.traversal import Reachability
 from tests.unit.graph.helpers import edge, graph_of, nid
@@ -148,23 +148,23 @@ def test_output_is_identical_for_any_insertion_order(spec: Spec, data: st.DataOb
 
 @given(specs())
 def test_duplicates_merge_by_the_documented_rule(spec: Spec) -> None:
-    """Batch form of ADR-0009 §6: among all occurrences of one (source, kind, target), the
-    least-restricted group wins; the stored edge has that group's strongest confidence and the
-    union of its flags and evidence. Never stronger than an occurrence in the same context."""
-    groups: dict[tuple[NodeId, EdgeKind, NodeId], list[Edge]] = {}
+    """Batch form of ADR-0009 §6: one stored edge per edge key (source, kind, target,
+    restricting flags), with the group's strongest confidence and the union of its flags and
+    evidence. Edges that differ only in restricting flags are all kept."""
+    groups: dict[EdgeKey, list[Edge]] = {}
     for e in spec.edges:
-        groups.setdefault((e.source, e.kind, e.target), []).append(e)
+        groups.setdefault(edge_key(e), []).append(e)
     graph = spec.build()
-    assert graph.edge_count == len(groups)
-    for (source, kind, target), occurrences in groups.items():
-        least = min(restriction_key(e) for e in occurrences)
-        winners = [e for e in occurrences if restriction_key(e) == least]
-        stored = graph.edge(source, kind, target)
+    assert graph.edge_count == len(groups) == len(graph.edges())
+    for (source, kind, target, restricting), occurrences in groups.items():
+        stored = graph.edge(source, kind, target, restricting)
         assert stored is not None
-        assert stored.confidence is max((e.confidence for e in winners), key=lambda c: c.rank)
-        assert stored.flags == frozenset().union(*(e.flags for e in winners))
-        assert stored.evidence_ids == tuple(sorted({i for e in winners for i in e.evidence_ids}))
-        assert restriction_key(stored) == least
+        assert stored.confidence is max((e.confidence for e in occurrences), key=lambda c: c.rank)
+        assert stored.flags == frozenset().union(*(e.flags for e in occurrences))
+        assert stored.evidence_ids == tuple(
+            sorted({i for e in occurrences for i in e.evidence_ids})
+        )
+        assert restrictions(stored) == restricting
 
 
 @given(specs(), kind_filters, st.data())
@@ -281,11 +281,13 @@ def _check_paths(
         hop = (e.target, e.source) if reverse else (e.source, e.target)
         hops[hop[0]].add(hop[1])
         current = best.get(hop)
-        # The strongest qualifying edge explains a hop; a tie goes to the smaller kind.
-        if current is None or (-e.confidence.rank, e.kind.value) < (
-            -current.confidence.rank,
-            current.kind.value,
-        ):
+        # The strongest qualifying edge explains a hop (parallel edges included).
+        # Ties: the smaller kind, then the less-restricted parallel edge.
+        if current is None or (
+            -e.confidence.rank,
+            e.kind.value,
+            restriction_key(e.flags),
+        ) < (-current.confidence.rank, current.kind.value, restriction_key(current.flags)):
             best[hop] = e
 
     def cost(path: tuple[NodeId, ...]) -> tuple[int, int, int]:

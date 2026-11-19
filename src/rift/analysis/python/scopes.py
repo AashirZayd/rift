@@ -53,6 +53,7 @@ class Scope:
     opaque: set[str] = field(default_factory=set)
     class_qualname: str | None = None  # set on a method's scope (and on a class scope)
     self_name: str | None = None  # first parameter of a method (not for staticmethods)
+    is_classmethod: bool = False  # self_name is bound to the class, not an instance
 
     def bind(self, name: str, binding: Binding) -> None:
         existing = self.bindings.setdefault(name, [])

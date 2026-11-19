@@ -14,9 +14,11 @@ import pytest
 
 import rift.graph
 from rift.core.ids import NodeId
-from rift.core.models.graph import Confidence, Edge, EdgeKind, EdgeOrigin, Node, NodeKind
+from rift.core.models.graph import Confidence, Edge, EdgeFlag, EdgeKind, EdgeOrigin, Node, NodeKind
 from rift.graph.multigraph import DependencyGraph
-from rift.graph.traversal import breadth_first
+from rift.graph.traversal import Adjacency, breadth_first
+
+Parallel = Mapping[frozenset[EdgeFlag], Edge]
 
 CHAIN = 100_000
 KINDS = tuple(EdgeKind)
@@ -133,14 +135,14 @@ def test_cycle_heavy_graph_terminates_with_bfs_layering() -> None:
                 assert result.depth(node) == result.depth(step.previous) + 1
 
 
-class CountingAdjacency(Mapping[NodeId, Mapping[EdgeKind, Mapping[NodeId, Edge]]]):
+class CountingAdjacency(Adjacency):
     """Counts how often each node's neighbours are fetched, i.e. how often it is expanded."""
 
-    def __init__(self, inner: Mapping[NodeId, Mapping[EdgeKind, Mapping[NodeId, Edge]]]) -> None:
+    def __init__(self, inner: Adjacency) -> None:
         self.inner = inner
         self.expanded: Counter[NodeId] = Counter()
 
-    def __getitem__(self, key: NodeId) -> Mapping[EdgeKind, Mapping[NodeId, Edge]]:
+    def __getitem__(self, key: NodeId) -> Mapping[EdgeKind, Mapping[NodeId, Parallel]]:
         self.expanded[key] += 1
         return self.inner[key]
 
@@ -157,11 +159,12 @@ class CountingAdjacency(Mapping[NodeId, Mapping[EdgeKind, Mapping[NodeId, Edge]]
 @pytest.mark.slow
 def test_cycle_heavy_traversal_expands_every_node_exactly_once() -> None:
     size, clique = 20_000, 200
-    adjacency: dict[NodeId, dict[EdgeKind, dict[NodeId, Edge]]] = {
+    adjacency: dict[NodeId, dict[EdgeKind, dict[NodeId, dict[frozenset[EdgeFlag], Edge]]]] = {
         _name(i): {} for i in range(size)
     }
     for source, target, kind in _cycle_heavy_pairs(size, clique):
-        adjacency[_name(source)].setdefault(kind, {})[_name(target)] = Edge(
+        parallel = adjacency[_name(source)].setdefault(kind, {}).setdefault(_name(target), {})
+        parallel[frozenset()] = Edge(
             source=_name(source),
             target=_name(target),
             kind=kind,

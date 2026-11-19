@@ -642,6 +642,8 @@ class FileResolver:
         if not isinstance(root, ast.Name):
             self._expression_call(func, root, attrs, scope, source)
             return
+        if not attrs and self._class_of_receiver(root.id, scope, source, classmethod=True):
+            return  # cls() in a classmethod
         chain = self.r.chain(self.facts, func, scope)
         if chain.complete:
             self._resolved_call(func, chain, source)
@@ -682,8 +684,43 @@ class FileResolver:
         ``handlers[k]()`` and ``make()()`` are ``unknown`` (ADR-0007 item 9a)."""
         if attrs:
             self._call_on_result(root, attrs, scope, source)
+        elif self._type_of_self_call(root, scope, source):
+            return  # type(self)() in a method
         elif not isinstance(root, ast.Lambda):  # a lambda's body is analyzed in place
             self._record(func, source, UnresolvedReason.UNKNOWN)
+
+    def _class_of_receiver(
+        self, name: str, scope: Scope, source: NodeId, *, classmethod: bool
+    ) -> bool:
+        """``name`` is the receiver of the enclosing method (``cls`` of a classmethod when
+        ``classmethod``, else ``self`` of an instance method), never rebound: a call creating
+        an instance of it calls the defining class, ``likely`` since a subclass may be the
+        receiver (ADR-0007 item 9b). Returns whether the edge was recorded."""
+        owner = self.r.lookup(name, scope).scope
+        if (
+            owner is None
+            or owner.self_name != name
+            or owner.class_qualname is None
+            or owner.is_classmethod is not classmethod
+            or name in owner.opaque
+            or self.facts.module is None
+        ):
+            return False
+        target = Target(self.facts.module, owner.class_qualname, Confidence.LIKELY)
+        self._edge(source, target, EdgeKind.CALLS)
+        return True
+
+    def _type_of_self_call(self, root: ast.expr, scope: Scope, source: NodeId) -> bool:
+        """``type(self)()`` in an instance method: the defining class, ``likely``."""
+        if not (
+            isinstance(root, ast.Call)
+            and len(root.args) == 1
+            and not root.keywords
+            and isinstance(root.args[0], ast.Name)
+            and self.r.qualified(root.func, scope) == "builtins.type"
+        ):
+            return False
+        return self._class_of_receiver(root.args[0].id, scope, source, classmethod=False)
 
     def _call_on_result(
         self, receiver: ast.expr, attrs: list[str], scope: Scope, source: NodeId

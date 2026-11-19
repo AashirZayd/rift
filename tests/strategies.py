@@ -252,6 +252,7 @@ _ID_FOR_KIND: dict[NodeKind, st.SearchStrategy[NodeId]] = {
     NodeKind.CLASS: symbol_id,
     NodeKind.FUNCTION: symbol_id,
     NodeKind.METHOD: symbol_id,
+    NodeKind.CONSTANT: symbol_id,
     NodeKind.TEST: test_id,
     NodeKind.API_CONTRACT: node_id,
 }

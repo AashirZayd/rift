@@ -7,6 +7,12 @@ separately (see `docs/SPEC.md` §16).
 
 ## [Unreleased]
 
+### Pre-protocol vocabulary changes
+The Change Proof protocol is first published in M6; until then, model vocabularies may
+still change.
+- `NodeKind.constant` (SPEC §6.3): module-level constants are graph nodes, not folded into
+  their module (ADR-0009 §13).
+
 ### Fixed
 - Analyzer: these calls are now recorded as `unknown` unresolved references instead of being
   dropped (ADR-0007 item 9a):
@@ -22,17 +28,16 @@ separately (see `docs/SPEC.md` §16).
 ### Added
 - Dependency graph (M3, ADR-0009): `rift.graph.multigraph.DependencyGraph`, a custom in-memory
   directed multigraph with bidirectional adjacency.
-  - Duplicate edges are grouped by their restricting flags (`type_checking_only`,
-    `conditional`). The least-restricted group wins and merges internally: strongest confidence,
-    unioned provenance flags and evidence IDs. A merged edge is never stronger than an occurrence
-    in its own context.
+  - An edge's key is `(source, kind, target, restricting flags)`: edges that differ only in
+    `type_checking_only` / `conditional` are kept in parallel. Duplicates of one key merge to the
+    strongest confidence, with provenance flags and evidence IDs unioned.
   - Iterative BFS `forward_reachable` / `reverse_reachable` with validated kind,
     `min_confidence` and `max_depth` filters and sorted results. Each reached node gets a
     shortest explanation path with the fewest weak edges, ties going to the smallest node IDs.
   - Deterministic, strict `to_dict` / `from_dict`.
   - `rift.graph.builder.build_graph(results)` turns M2 `AnalysisResult`s into the graph:
     - collectable test functions and methods become `test:` nodes;
-    - constants fold into their module;
+    - module-level constants are `constant` nodes;
     - an edge to a missing node is kept in `dangling` and recorded as an
       `UnresolvedReference`.
 - `benchmarks/test_graph_build.py`: a pytest-based benchmark that builds the graph for a

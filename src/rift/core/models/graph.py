@@ -16,6 +16,7 @@ class NodeKind(StrEnum):
     CLASS = "class"
     FUNCTION = "function"
     METHOD = "method"
+    CONSTANT = "constant"  # module-level UPPER_CASE assignment (pre-protocol addition, M3)
     TEST = "test"
     API_CONTRACT = "api_contract"
 
@@ -102,7 +103,7 @@ def _check_node_kind(node_id: NodeId, kind: NodeKind) -> None:
         require(prefix == "test", f"{kind} node needs a test: id, got {node_id!r}")
     elif kind is NodeKind.MODULE:
         require(prefix == "py" and ":" not in rest, f"module node needs py:<module>: {node_id!r}")
-    elif kind in {NodeKind.CLASS, NodeKind.FUNCTION, NodeKind.METHOD}:
+    elif kind in {NodeKind.CLASS, NodeKind.FUNCTION, NodeKind.METHOD, NodeKind.CONSTANT}:
         require(prefix == "py" and ":" in rest, f"{kind} node needs py:<module>:<qualname>")
 
 

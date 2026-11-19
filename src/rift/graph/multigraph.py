@@ -1,9 +1,11 @@
 """The in-memory directed dependency multigraph (SPEC §10).
 
-Adjacency is stored in both directions as ``node -> kind -> neighbour -> edge``. That makes it a
-multigraph over edge kinds, with at most one edge per ``(source, kind, target)``: a duplicate is
-merged by :func:`rift.graph.merge.merge_edges`. Dicts keep insertion order, but no output depends
-on it. Every collection returned is sorted.
+Adjacency is stored in both directions as
+``node -> kind -> neighbour -> restricting flags -> edge``. There is at most one edge per edge key
+``(source, kind, target, restricting flags)`` (ADR-0009 §6): a duplicate is merged by
+:func:`rift.graph.merge.merge_edges`, and edges that differ only in their restricting flags
+(``type_checking_only``, ``conditional``) are kept in parallel. Dicts keep insertion order, but no
+output depends on it. Every collection returned is sorted.
 """
 
 from collections.abc import Iterable
@@ -13,17 +15,18 @@ from rift.core.canonical import JsonValue
 from rift.core.errors import ErrorCode, SerializationError
 from rift.core.ids import NodeId
 from rift.core.models.analysis import edge_sort_key
-from rift.core.models.graph import Confidence, Edge, EdgeKind, Node
+from rift.core.models.graph import Confidence, Edge, EdgeFlag, EdgeKind, Node
 from rift.core.serialization import from_dict, to_dict
 from rift.graph.errors import GraphError
-from rift.graph.merge import merge_edges
+from rift.graph.merge import RESTRICTING_FLAGS, merge_edges, restriction_key, restrictions
 from rift.graph.traversal import Reachability, breadth_first, check_confidence, check_kinds
 
 GRAPH_FORMAT: Final = "rift.graph"
 GRAPH_FORMAT_VERSION: Final = 1
 _DOCUMENT_KEYS = frozenset({"format", "version", "nodes", "edges"})
 
-_Adjacency = dict[NodeId, dict[EdgeKind, dict[NodeId, Edge]]]
+_Parallel = dict[frozenset[EdgeFlag], Edge]  # restricting flags -> edge
+_Adjacency = dict[NodeId, dict[EdgeKind, dict[NodeId, _Parallel]]]
 
 
 class DependencyGraph:
@@ -59,18 +62,19 @@ class DependencyGraph:
             )
 
     def add_edge(self, edge: Edge) -> Edge:
-        """Add ``edge``, merging it with an existing ``(source, kind, target)`` edge; returns the
+        """Add ``edge``, merging it with an existing edge of the same edge key; returns the
         stored edge. Raises :class:`GraphError` if either endpoint is not a node."""
         for endpoint in (edge.source, edge.target):
             if endpoint not in self._nodes:
                 raise GraphError(f"edge endpoint {endpoint!r} is not a node in the graph")
-        by_target = self._out[edge.source].setdefault(edge.kind, {})
-        existing = by_target.get(edge.target)
+        key = restrictions(edge)
+        parallel = self._out[edge.source].setdefault(edge.kind, {}).setdefault(edge.target, {})
+        existing = parallel.get(key)
         stored = edge if existing is None else merge_edges(existing, edge)
         if existing is None:
             self._edge_count += 1
-        by_target[edge.target] = stored
-        self._in[edge.target].setdefault(edge.kind, {})[edge.source] = stored
+        parallel[key] = stored
+        self._in[edge.target].setdefault(edge.kind, {}).setdefault(edge.source, {})[key] = stored
         return stored
 
     # ------------------------------------------------------------------ queries
@@ -104,17 +108,38 @@ class DependencyGraph:
                     edge
                     for by_kind in self._out.values()
                     for by_target in by_kind.values()
-                    for edge in by_target.values()
+                    for parallel in by_target.values()
+                    for edge in parallel.values()
                 ),
                 key=edge_sort_key,
             )
         )
 
-    def edge(self, source: NodeId, kind: EdgeKind, target: NodeId) -> Edge | None:
-        """The edge ``source -kind-> target``, or ``None``; unknown endpoints raise."""
+    def edge(
+        self,
+        source: NodeId,
+        kind: EdgeKind,
+        target: NodeId,
+        restricting: Iterable[EdgeFlag] = (),
+    ) -> Edge | None:
+        """The edge with key ``(source, kind, target, restricting)``, or ``None``. The default
+        is the unrestricted edge; unknown endpoints and non-restricting flags raise."""
         self.node(source)
         self.node(target)
-        return self._out[source].get(kind, {}).get(target)
+        key = frozenset(restricting)
+        if not key <= RESTRICTING_FLAGS:
+            raise GraphError(
+                "restricting must hold only type_checking_only / conditional",
+                code=ErrorCode.INVALID_ARGUMENT,
+            )
+        return self._out[source].get(kind, {}).get(target, {}).get(key)
+
+    def edges_between(self, source: NodeId, kind: EdgeKind, target: NodeId) -> tuple[Edge, ...]:
+        """Every parallel ``source -kind-> target`` edge, least restricted first."""
+        self.node(source)
+        self.node(target)
+        parallel = self._out[source].get(kind, {}).get(target, {})
+        return tuple(parallel[k] for k in sorted(parallel, key=restriction_key))
 
     def successors(
         self,
@@ -123,9 +148,12 @@ class DependencyGraph:
         kinds: Iterable[EdgeKind] | None = None,
         min_confidence: Confidence = Confidence.UNKNOWN,
     ) -> tuple[Edge, ...]:
-        """Outgoing edges of ``node_id`` that pass the filters, sorted by ``(target, kind)``."""
+        """Outgoing edges of ``node_id`` that pass the filters, sorted by ``(target, kind,
+        restrictions)``."""
         edges = self._incident(self._out, node_id, kinds, min_confidence)
-        return tuple(sorted(edges, key=lambda e: (e.target, e.kind.value)))
+        return tuple(
+            sorted(edges, key=lambda e: (e.target, e.kind.value, restriction_key(e.flags)))
+        )
 
     def predecessors(
         self,
@@ -134,9 +162,12 @@ class DependencyGraph:
         kinds: Iterable[EdgeKind] | None = None,
         min_confidence: Confidence = Confidence.UNKNOWN,
     ) -> tuple[Edge, ...]:
-        """Incoming edges of ``node_id`` that pass the filters, sorted by ``(source, kind)``."""
+        """Incoming edges of ``node_id`` that pass the filters, sorted by ``(source, kind,
+        restrictions)``."""
         edges = self._incident(self._in, node_id, kinds, min_confidence)
-        return tuple(sorted(edges, key=lambda e: (e.source, e.kind.value)))
+        return tuple(
+            sorted(edges, key=lambda e: (e.source, e.kind.value, restriction_key(e.flags)))
+        )
 
     def _incident(
         self,
@@ -152,7 +183,8 @@ class DependencyGraph:
             edge
             for kind, by_neighbour in adjacency[node_id].items()
             if kind in wanted
-            for edge in by_neighbour.values()
+            for parallel in by_neighbour.values()
+            for edge in parallel.values()
             if edge.confidence >= floor
         ]
 
@@ -210,7 +242,7 @@ class DependencyGraph:
     @classmethod
     def from_dict(cls, data: object) -> "DependencyGraph":
         """Strict decoding of :meth:`to_dict` output: unknown or missing keys, another format or
-        version, duplicate nodes, duplicate ``(source, kind, target)`` edges and dangling edges
+        version, duplicate nodes, duplicate edge keys and dangling edges
         raise :class:`SerializationError`. The order of ``nodes`` and ``edges`` is not
         significant; ``to_dict`` of the result is always canonical."""
         if not isinstance(data, dict):
@@ -235,9 +267,10 @@ class DependencyGraph:
             edge = from_dict(Edge, item)
             if not (graph.has_node(edge.source) and graph.has_node(edge.target)):
                 raise SerializationError(f"edge {edge.source!r} -> {edge.target!r} is dangling")
-            if graph.edge(edge.source, edge.kind, edge.target) is not None:
+            if graph.edge(edge.source, edge.kind, edge.target, restrictions(edge)) is not None:
                 raise SerializationError(
                     f"duplicate edge {edge.source!r} -{edge.kind}-> {edge.target!r}"
+                    f" {sorted(f.value for f in restrictions(edge))}"
                 )
             graph.add_edge(edge)
         return graph

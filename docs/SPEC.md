@@ -198,7 +198,7 @@ Minimum fields below; implementers may add fields, never remove these without an
 - `SourceLocation(path: str, start_line: int, start_col: int, end_line: int, end_col: int)`
 
 ### 6.3 Graph
-- `NodeKind`: `file | module | class | function | method | test | api_contract`
+- `NodeKind`: `file | module | class | function | method | constant | test | api_contract` (`constant`: a module-level constant, §9.2)
 - `EdgeKind`: `imports | calls | inherits | references | tests | depends_on`
 - `EdgeOrigin`: `ast_static | name_resolution | heuristic | config_declared | plugin`
 - `Confidence`: `certain | likely | possible | unknown` — ordinal enum, **not** floats (floats invite fake precision and break determinism).
@@ -297,6 +297,7 @@ Custom in-memory directed multigraph. No graph DB, no networkx.
 - API: `add_node`, `add_edge` (target must exist or be rejected → caller records unresolved), `successors`, `predecessors`, `reverse_reachable(start, kinds, min_confidence, max_depth=None)`, `forward_reachable(...)`, `subgraph(nodes)`, `to_dict()` / `from_dict()`.
 - Traversal: iterative BFS (no recursion — deep graphs must not hit the recursion limit), visited set, returns a sorted tuple plus the shortest path to each reached node (for explanations).
 - Duplicate edge (same source, kind, target): keep the strongest confidence; merge evidence IDs.
+- The restricting flags (`type_checking_only`, `conditional`) are part of that key: edges that differ only in them are kept as parallel edges, and traversal explains a hop with the strongest of them.
 - Property tests (Hypothesis): reachability is transitive; reverse(forward) symmetry; serialization round-trips; output identical across insertion orders.
 
 ---

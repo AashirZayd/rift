@@ -12,16 +12,18 @@ returning sorted results and shortest explanation paths, a duplicate-edge rule, 
 deterministic serialization. It leaves open:
 - how flags merge;
 - which shortest path is reported when several exist;
-- how M2 symbols map onto the §6.3 node vocabulary, which has no `constant` kind;
+- how M2 symbols map onto the §6.3 node vocabulary (which first had no `constant` kind);
 - what happens to an edge whose target is not a node.
 
 ## Decision
 
 ### Storage (`rift.graph.multigraph`)
 
-1. `DependencyGraph` keeps `node -> kind -> neighbour -> edge` in both directions, so there is
-   at most one edge per `(source, kind, target)`. It imports only `rift.core`; the §4.1 layers
-   contract enforces this.
+1. `DependencyGraph` keeps `node -> kind -> neighbour -> restricting flags -> edge` in both
+   directions, so there is at most one edge per **edge key** `(source, kind, target, restricting
+   flags)` (6). `edge(source, kind, target, restricting=())` looks one up (the default is the
+   unrestricted edge), and `edges_between(source, kind, target)` returns the parallel edges, least
+   restricted first. It imports only `rift.core`; the §4.1 layers contract enforces this.
 2. `add_node` is idempotent for an equal node. A different node under the same ID raises
    `GraphError(graph_conflict)`.
 3. `add_edge` raises `GraphError(unknown_node)` if either endpoint is missing. The caller records
@@ -40,27 +42,25 @@ deterministic serialization. It leaves open:
 
 ### Duplicate edges (`rift.graph.merge`)
 
-6. Occurrences of one `(source, kind, target)` are grouped by their **restricting flags**
-   (`type_checking_only`, `conditional`), which record *when* the edge holds.
-   - The group with the **fewest restrictions** wins. A runtime import subsumes a
-     `TYPE_CHECKING` import of the same module. With equally many restrictions, the sorted flag
-     names decide: `conditional` beats `type_checking_only`, since a runtime edge is the broader
-     dependency.
-   - Inside the winning group:
+6. An edge's key is `(source, kind, target, restricting flags)`. The restricting flags
+   (`type_checking_only`, `conditional`) say *when* the edge holds, so they are part of what the
+   edge claims (decided by the user after M3, SPEC §10):
+   - edges that differ only in their restricting flags are **kept in parallel**. A `certain`
+     `TYPE_CHECKING` import and a `likely` runtime import of the same module are two edges, each
+     with its own confidence;
+   - edges with the same key merge:
      - `confidence` is the strongest;
      - `origin` comes from a strongest edge; on a tie, the one declared first in `EdgeOrigin`
        wins (`ast_static`, `name_resolution`, `heuristic`, `config_declared`, `plugin`);
      - provenance flags (`star_import`, `dynamic`: *how* the edge was found) are unioned;
      - `evidence_ids` are the sorted union.
-   - Occurrences in losing groups are subsumed: their confidence, provenance and evidence
-     describe another context.
 
-   This never hides a runtime dependency behind `type_checking_only`, and never stores a
-   confidence that no occurrence in the stored context has. Example: a `certain`
-   `TYPE_CHECKING` import plus a `likely` `import_module("x")` is stored as `likely [dynamic]`,
-   not `certain`. §10's "keep the strongest confidence" holds within a restriction context.
-7. The rule is a lexicographic choice followed by a commutative, associative merge, so the stored
-   edge never depends on insertion order.
+   No occurrence's confidence is ever attributed to a different context, and no runtime
+   dependency is hidden behind `type_checking_only`.
+7. The merge is commutative and associative, so the stored edges never depend on insertion
+   order. Traversal handles parallel edges: a hop is explained by the strongest qualifying edge
+   among all kinds and restriction sets, with ties going to the smaller kind, then to the less
+   restricted edge (10).
 
 ### Traversal (`rift.graph.traversal`)
 
@@ -90,8 +90,8 @@ deterministic serialization. It leaves open:
     2. a remaining tie goes to the **lexicographically smallest** path, compared as a sequence of
        node IDs from the start.
 
-    Each hop is explained by the strongest qualifying edge between its two nodes, with ties going
-    to the smaller kind value. The cost is additive, so the per-level BFS computes this exactly.
+    Each hop is explained by the strongest qualifying edge between its two nodes, parallel edges
+    included, with ties going to the smaller kind value, then to the less-restricted edge. The cost is additive, so the per-level BFS computes this exactly.
     Each node keeps its best cost and the lexicographic rank of its path within its level, and
     the next level is ranked by `(parent rank, node ID)`.
 
@@ -114,14 +114,13 @@ deterministic serialization. It leaves open:
       `py:` function or method node. (The analyzer marks a method as a test from its innermost
       class only.)
     - symbol nodes carry `attributes = {symbol_kind, visibility}`.
-13. **Constants** have no `NodeKind` in v0.1, and adding one would change the protocol
-    vocabulary. A constant folds into its module node, and an edge to `py:m:CONST` becomes an edge
-    to `py:m`.
-    - This is coarser but conservative: every dependant of the constant is still a dependant of
-      its module.
-    - A self-loop that only folding creates (a module using its own constant, `B = A + 1`) is not
-      stored: a module trivially depends on itself.
-    - To revisit when the vocabularies are finalized in M6.
+13. **Constants** are `constant` nodes (`py:<module>:<NAME>`, label = the name), so a change
+    to a constant's line has a node of its own. Their users reach them through the analyzer's
+    `references` edges: from the function that reads them, or from the module for a module-level
+    use (`B = A + 1` gives `py:m -> py:m:A`). The user approved adding `NodeKind.constant` after
+    M3, as a pre-protocol vocabulary change (SPEC §6.3; the protocol is first published in M6).
+
+    The first version had no such kind and folded constants into their module node.
 14. **Edges** keep their kind, origin, confidence, flags and evidence IDs; only the endpoints
     renamed in 12–13 change. An edge whose target is not a node is **never dropped**:
     - it is kept whole, unmerged, in `GraphBuild.dangling` (sorted by `edge_sort_key`), so a
@@ -142,16 +141,26 @@ deterministic serialization. It leaves open:
 ### Amendment after the fresh-context review (same milestone)
 
 The first version was reviewed before acceptance. Changes:
-- **6** replaced "intersect restricting flags, keep the strongest confidence". That rule could
+- **6** (superseded again after M3; see the next section) replaced "intersect restricting
+  flags, keep the strongest confidence". That rule could
   store `certain` for a dependency whose only runtime evidence was `likely` (SPEC §2.2).
 - **8** added argument validation. Malformed filters used to return silently empty results.
 - **10** made explanations prefer strong edges. They used to follow node IDs only, even through
   a `possible` edge when a `certain` path of the same length existed.
 - **12** requires every enclosing class to be a `Test*` class. Before, `Helper::TestInner::test_x`
   produced a test ID pytest cannot run.
-- **13** dropped folded self-loops.
+- **13** dropped folded self-loops (moot since constants became nodes; see the next section).
 - **14** added `dangling` and the kind in `raw`. Several dangling edges used to collapse into one
   record.
+
+### Decisions after M3 acceptance (user, branch `m3/review-decisions`)
+
+- **6–7**: restricting flags became part of the edge key. Parallel edges replace the review
+  version's "the least-restricted group wins". That version never inflated confidence, but it
+  discarded the subsumed occurrences: a `certain` `TYPE_CHECKING` import next to a `likely`
+  runtime one was invisible as `certain`. Now both are kept.
+- **13**: `NodeKind.constant` was approved (SPEC §6.3), so constants are nodes instead of being
+  folded into their module.
 
 ## Alternatives considered
 
@@ -159,12 +168,15 @@ The first version was reviewed before acceptance. Changes:
   dependency `type_checking_only` (6).
 - **Intersect restricting flags and keep the strongest confidence** (the first version).
   Rejected: it inflates confidence across contexts (6).
-- **Keep parallel duplicate edges** instead of merging them. Rejected: §10 requires one edge per
-  `(source, kind, target)`.
+- **The least-restricted group wins** (the review version). Superseded: it is sound, but it
+  drops the subsumed occurrences' confidence and evidence (6).
+- **Keep every occurrence as its own edge.** Rejected: §10 merges duplicates. Only restricting
+  flags split an edge key; provenance flags and origin do not.
 - **`add_edge` returning `False` for a dangling edge.** Rejected: callers could ignore it and
   drop the edge.
 - **Store the full path per reached node.** Rejected: quadratic memory on deep chains.
-- **Add `NodeKind.constant`.** Deferred: it changes the protocol vocabulary and needs approval.
+- **Fold constants into their module node** (the first version). Superseded once
+  `NodeKind.constant` was approved: folding is coarser and loses the constant's own span.
 - **Drop edges to constants, or record them as unresolved.** Rejected: they are resolved, so
   either choice would misreport them.
 
@@ -182,9 +194,6 @@ Pinned by:
 - `tests/contract/test_determinism.py`: PYTHONHASHSEED 0 vs 4242.
 
 Known limitations:
-- Constants are folded into module nodes (13).
 - Test node IDs carry no parametrization and are split at the first `::` (ADR-0005).
-- Merging keeps only the least-restricted context. A `certain` `TYPE_CHECKING` occurrence next
-  to a `likely` runtime one is not visible as `certain` anywhere in the graph (6).
 - The graph is mutable while it is being built. Consumers treat a finished graph as read-only by
   convention; nothing enforces it.

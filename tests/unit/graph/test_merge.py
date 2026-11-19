@@ -1,5 +1,6 @@
-"""ADR-0009: duplicate edges (same source, kind, target) merge by a fixed, order-free rule:
-the least-restricted group of occurrences wins, then the strongest occurrence within it."""
+"""ADR-0009 §6: an edge's key is (source, kind, target, restricting flags). Edges with the same
+key merge by a fixed, order-free rule; edges that differ only in restricting flags are kept in
+parallel."""
 
 import itertools
 
@@ -8,7 +9,7 @@ import pytest
 from rift.core.errors import ErrorCode
 from rift.core.models.graph import Confidence, EdgeFlag, EdgeKind, EdgeOrigin
 from rift.graph.errors import GraphError
-from rift.graph.merge import merge_edges
+from rift.graph.merge import edge_key, merge_edges, restriction_key
 from tests.unit.graph.helpers import edge, ev, graph_of, nid
 
 TC = EdgeFlag.TYPE_CHECKING_ONLY
@@ -32,44 +33,66 @@ def test_equal_confidence_takes_the_first_declared_origin() -> None:
     assert merge_edges(b, a).origin is EdgeOrigin.AST_STATIC
 
 
-def test_evidence_ids_are_unioned_and_sorted() -> None:
-    merged = merge_edges(edge("a", "b", evidence=(3, 1)), edge("a", "b", evidence=(2, 3)))
+def test_evidence_ids_and_provenance_flags_are_unioned() -> None:
+    merged = merge_edges(
+        edge("a", "b", evidence=(3, 1), flags={TC, STAR}),
+        edge("a", "b", evidence=(2, 3), flags={TC, DYN}),
+    )
     assert merged.evidence_ids == (ev(1), ev(2), ev(3))
+    assert merged.flags == {TC, STAR, DYN}
 
 
 @pytest.mark.parametrize(
-    ("first", "second", "expected"),
+    ("first", "second"),
     [
-        pytest.param({TC}, set(), set(), id="runtime-import-subsumes-type-checking-only"),
-        pytest.param({TC}, {TC}, {TC}, id="type-checking-only-everywhere-stays"),
-        pytest.param({COND}, set(), set(), id="unconditional-subsumes-conditional"),
-        pytest.param({TC}, {COND}, {COND}, id="conditional-runtime-beats-type-checking"),
-        pytest.param({TC, COND}, {TC}, {TC}, id="fewer-restrictions-win"),
-        pytest.param({STAR}, set(), {STAR}, id="provenance-unioned-within-a-group"),
-        pytest.param({STAR, TC}, {DYN, TC}, {STAR, DYN, TC}, id="same-group-both-rules"),
-        pytest.param({STAR, TC}, {DYN}, {DYN}, id="subsumed-provenance-is-not-carried"),
+        pytest.param({TC}, set(), id="type-checking-vs-runtime"),
+        pytest.param({COND}, set(), id="conditional-vs-unconditional"),
+        pytest.param({TC}, {COND}, id="different-restrictions"),
+        pytest.param({TC, COND}, {TC}, id="superset-of-restrictions"),
+        pytest.param({TC, STAR}, {DYN}, id="provenance-does-not-matter-restrictions-do"),
     ],
 )
-def test_flags_merge_by_restriction_group(
-    first: set[EdgeFlag], second: set[EdgeFlag], expected: set[EdgeFlag]
+def test_different_restricting_flags_are_different_keys(
+    first: set[EdgeFlag], second: set[EdgeFlag]
 ) -> None:
     a, b = edge("a", "b", flags=first), edge("a", "b", flags=second)
-    assert merge_edges(a, b).flags == expected
-    assert merge_edges(b, a).flags == expected
+    assert edge_key(a) != edge_key(b)
+    with pytest.raises(GraphError) as exc_info:
+        merge_edges(a, b)
+    assert exc_info.value.code is ErrorCode.GRAPH_CONFLICT
 
 
-def test_confidence_is_never_inflated_by_a_subsumed_occurrence() -> None:
-    """Review finding: a certain TYPE_CHECKING import plus a likely dynamic runtime import is a
-    likely runtime dependency, never a certain one."""
+def test_provenance_flags_are_not_part_of_the_key() -> None:
+    assert edge_key(edge("a", "b", flags={STAR})) == edge_key(edge("a", "b", flags={DYN}))
+
+
+def test_type_checking_and_runtime_edges_are_both_kept() -> None:
+    """Review decision 1: a certain TYPE_CHECKING import and a likely runtime import of the
+    same module are two edges."""
     typing_only = edge("a", "b", confidence=Confidence.CERTAIN, flags={TC}, evidence=(1,))
     runtime = edge("a", "b", confidence=Confidence.LIKELY, flags={DYN}, evidence=(2,))
-    for pair in ((typing_only, runtime), (runtime, typing_only)):
-        merged = merge_edges(*pair)
-        assert (merged.confidence, merged.flags, merged.evidence_ids) == (
-            Confidence.LIKELY,
-            frozenset({DYN}),
-            (ev(2),),
-        )
+    graph = graph_of(["a", "b"], [typing_only, runtime])
+    assert graph.edge_count == 2
+    assert graph.edge(nid("a"), EdgeKind.IMPORTS, nid("b")) == runtime
+    assert graph.edge(nid("a"), EdgeKind.IMPORTS, nid("b"), {TC}) == typing_only
+    assert graph.edges_between(nid("a"), EdgeKind.IMPORTS, nid("b")) == (runtime, typing_only)
+    assert graph.successors(nid("a")) == (runtime, typing_only)
+    assert graph.predecessors(nid("b")) == (runtime, typing_only)
+
+
+def test_edge_lookup_rejects_non_restricting_flags() -> None:
+    graph = graph_of(["a", "b"], [edge("a", "b")])
+    with pytest.raises(GraphError) as exc_info:
+        graph.edge(nid("a"), EdgeKind.IMPORTS, nid("b"), {STAR})
+    assert exc_info.value.code is ErrorCode.INVALID_ARGUMENT
+
+
+def test_restriction_order_is_least_restricted_first() -> None:
+    order = sorted(
+        [frozenset({TC, COND}), frozenset({TC}), frozenset(), frozenset({COND})],
+        key=restriction_key,
+    )
+    assert order == [frozenset(), frozenset({COND}), frozenset({TC}), frozenset({TC, COND})]
 
 
 def test_merge_is_order_independent_over_many_occurrences() -> None:
@@ -81,27 +104,34 @@ def test_merge_is_order_independent_over_many_occurrences() -> None:
     ]
     results = set()
     for order in itertools.permutations(occurrences):
-        merged = order[0]
-        for item in order[1:]:
-            merged = merge_edges(merged, item)
-        results.add(merged)
+        graph = graph_of(["a", "b"], order)
+        results.add(graph.edges())
     (only,) = results
-    assert (only.confidence, only.origin) == (Confidence.CERTAIN, EdgeOrigin.AST_STATIC)
-    assert only.flags == {DYN}
-    assert only.evidence_ids == (ev(2),)
+    runtime, typing_only = only
+    assert (runtime.confidence, runtime.origin, runtime.flags, runtime.evidence_ids) == (
+        Confidence.CERTAIN,
+        EdgeOrigin.AST_STATIC,
+        frozenset({DYN}),
+        (ev(2),),
+    )
+    assert (typing_only.confidence, typing_only.flags, typing_only.evidence_ids) == (
+        Confidence.LIKELY,
+        frozenset({TC, STAR}),
+        (ev(1), ev(3)),
+    )
 
 
-def test_edges_of_different_identity_are_not_merged() -> None:
+def test_edges_of_different_kind_are_not_merged() -> None:
     with pytest.raises(GraphError) as exc_info:
         merge_edges(edge("a", "b"), edge("a", "b", kind=EdgeKind.CALLS))
     assert exc_info.value.code is ErrorCode.GRAPH_CONFLICT
 
 
-def test_graph_stores_one_merged_edge_per_identity() -> None:
+def test_graph_stores_one_merged_edge_per_key() -> None:
     graph = graph_of(
         ["a", "b"],
         [
-            edge("a", "b", confidence=Confidence.POSSIBLE, flags={TC}),
+            edge("a", "b", confidence=Confidence.POSSIBLE),
             edge("a", "b", confidence=Confidence.CERTAIN),
             edge("a", "b", kind=EdgeKind.REFERENCES),
         ],
@@ -109,6 +139,19 @@ def test_graph_stores_one_merged_edge_per_identity() -> None:
     assert graph.edge_count == 2
     stored = graph.edge(nid("a"), EdgeKind.IMPORTS, nid("b"))
     assert stored is not None
-    assert (stored.confidence, stored.flags) == (Confidence.CERTAIN, frozenset())
-    # The reverse index holds the same merged edge.
+    assert stored.confidence is Confidence.CERTAIN
     assert graph.predecessors(nid("b"), kinds={EdgeKind.IMPORTS}) == (stored,)
+
+
+def test_traversal_explains_with_the_strongest_parallel_edge() -> None:
+    weak_runtime = edge("a", "b", confidence=Confidence.POSSIBLE)
+    strong_typing = edge("a", "b", confidence=Confidence.CERTAIN, flags={TC})
+    graph = graph_of(["a", "b"], [weak_runtime, strong_typing])
+    assert graph.forward_reachable(nid("a")).path_edges(nid("b")) == (strong_typing,)
+    # Restricted to likely or stronger, only the TYPE_CHECKING edge qualifies.
+    likely = graph.forward_reachable(nid("a"), min_confidence=Confidence.LIKELY)
+    assert likely.path_edges(nid("b")) == (strong_typing,)
+    # On a confidence tie, the less-restricted parallel edge explains the hop.
+    tied = graph_of(["a", "b"], [edge("a", "b", flags={TC}), edge("a", "b", flags={COND})])
+    (step,) = tied.forward_reachable(nid("a")).path_edges(nid("b"))
+    assert step.flags == {COND}
