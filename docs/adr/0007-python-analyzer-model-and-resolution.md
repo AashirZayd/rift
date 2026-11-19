@@ -198,9 +198,23 @@ The review found these problems in the first implementation. Each is fixed and h
     silently, contradicting SPEC §2.3 and §9.3 ("otherwise unresolved"). Pinned by
     `tests/unit/analysis/test_unresolved_calls.py` and `test_extraction.py::test_scoping_rules`.
 
-    Known noise: `cls()` in a classmethod and `type(self)()` are also recorded as `unknown`.
-    That is SPEC-correct ("otherwise unresolved") but common; resolving them to the defining
-    class at `likely` is a candidate refinement.
+9b. **Receiver instantiation** (decided by the user after M3). These calls are a `calls` edge to
+    the defining class at `likely`, origin `name_resolution`, and are no longer `unknown`:
+    - `cls()` where `cls` is the first parameter of a classmethod: `@classmethod`,
+      `@builtins.classmethod`, or the implicit classmethods `__init_subclass__` and
+      `__class_getitem__`. Any parameter name counts;
+    - `type(self)()` where `self` is the first parameter of an instance method and `type` is the
+      builtin.
+
+    The confidence is `likely`, not `certain`, because the receiver may be a subclass (as with
+    `self.method()`, item 8). These stay `unknown` (9a):
+    - a rebound receiver (`cls = other; cls()`);
+    - `self()`, which calls `__call__`;
+    - `type(cls)()`, which is the metaclass;
+    - a staticmethod's or plain function's parameter;
+    - a shadowed `type`.
+
+    Pinned by `tests/unit/analysis/test_receiver_class_calls.py`.
 
 ## Alternatives considered
 

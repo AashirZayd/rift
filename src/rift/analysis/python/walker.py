@@ -259,6 +259,16 @@ def _is_staticmethod(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     return any(dotted(d) in {"staticmethod", "builtins.staticmethod"} for d in node.decorator_list)
 
 
+# Implicit classmethods: the interpreter passes the class as the first argument.
+_IMPLICIT_CLASSMETHODS = frozenset({"__init_subclass__", "__class_getitem__"})
+
+
+def _is_classmethod(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    return node.name in _IMPLICIT_CLASSMETHODS or any(
+        dotted(d) in {"classmethod", "builtins.classmethod"} for d in node.decorator_list
+    )
+
+
 class Walker:
     """Builds the :class:`FileFacts` of one module. Use :func:`walk_module`."""
 
@@ -451,6 +461,7 @@ class Walker:
             declared_nonlocal=declared_nonlocal,
             class_qualname=scope.class_qualname if is_method else None,
             self_name=self_name,
+            is_classmethod=self_name is not None and _is_classmethod(node),
         )
         self.body(node.body, inner, frozenset())
 
