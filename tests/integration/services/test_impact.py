@@ -192,3 +192,19 @@ def test_symbol_and_path_services(project: tuple[GitRepo, str]) -> None:
     by_path = impact_of_paths(repo.root, ["src/lib/util.py"])
     assert by_path.changed_nodes == ("py:lib.util", "py:lib.util:run")
     assert by_path.classification is ImpactClass.PUBLIC_API
+
+
+def test_removing_a_public_function_from_a_modified_file_is_public_api(
+    project: tuple[GitRepo, str],
+) -> None:
+    """Review #2: the base side (parsed in memory, never executed) shows compute is gone."""
+    repo, _ = project
+    repo.write("src/app/core.py", "def _helper():\n    return 1\n")
+    impact = _impact(project).impact
+    assert "py:app.core:compute" in impact.changed_nodes
+    assert "py:app.core:compute" in impact.public_interfaces
+    # Its users fail to import it: they, and the test, are affected.
+    assert {"py:app.api", "py:app.api:handle", TEST} <= set(impact.affected_nodes)
+    assert impact.related_tests == (TEST,)
+    assert impact.classification is ImpactClass.PUBLIC_API
+    assert impact.completeness is Completeness.PARTIAL  # the now-missing import is unresolved
