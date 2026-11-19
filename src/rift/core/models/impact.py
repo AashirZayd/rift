@@ -1,10 +1,12 @@
-"""Impact results (SPEC §6.4, §11). Computing impact is M4; these are the value types."""
+"""Impact results (SPEC §6.4, §11): the value types; ``rift.impact`` computes them."""
 
 from dataclasses import dataclass
 from enum import StrEnum
 
 from rift.core.ids import NodeId, validate_node_id
-from rift.core.models._checks import check_types, require, sorted_unique
+from rift.core.models._checks import check_types, require, sorted_unique, strictly_sorted
+from rift.core.models.analysis import limitation_sort_key, unresolved_sort_key
+from rift.core.models.evidence import Limitation
 from rift.core.models.graph import UnresolvedReference
 
 
@@ -42,6 +44,14 @@ class ImpactExplanation:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ImpactResult:
+    """What a change could affect (SPEC §11).
+
+    ``classification`` is an ordinal tier, never a risk probability. ``completeness`` is
+    orthogonal to it: ``limitations`` lists every reason the result is not complete, so it is
+    empty exactly when ``completeness`` is ``complete``. Every affected node and related test has
+    an explanation path from a changed node.
+    """
+
     changed_nodes: tuple[NodeId, ...]
     affected_nodes: tuple[NodeId, ...]
     public_interfaces: tuple[NodeId, ...]
@@ -49,6 +59,7 @@ class ImpactResult:
     unresolved: tuple[UnresolvedReference, ...]
     classification: ImpactClass
     completeness: Completeness
+    limitations: tuple[Limitation, ...]
     explanations: tuple[ImpactExplanation, ...]
 
     def __post_init__(self) -> None:
@@ -58,4 +69,19 @@ class ImpactResult:
             for node_id in values:
                 validate_node_id(node_id)
             sorted_unique(values, field_name)
-        sorted_unique([explanation.node for explanation in self.explanations], "explanations")
+        require(
+            all(node.startswith("test:") for node in self.related_tests),
+            "related_tests must be test: nodes",
+        )
+        strictly_sorted(self.unresolved, unresolved_sort_key, "unresolved")
+        strictly_sorted(self.limitations, limitation_sort_key, "limitations")
+        require(
+            (self.completeness is Completeness.COMPLETE) == (not self.limitations),
+            "limitations must be empty exactly when completeness is complete",
+        )
+        explained = [explanation.node for explanation in self.explanations]
+        sorted_unique(explained, "explanations")
+        require(
+            set(self.affected_nodes) | set(self.related_tests) <= set(explained),
+            "every affected node and related test needs an explanation",
+        )

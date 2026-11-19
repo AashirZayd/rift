@@ -12,6 +12,10 @@ The Change Proof protocol is first published in M6; until then, model vocabulari
 still change.
 - `NodeKind.constant` (SPEC §6.3): module-level constants are graph nodes, not folded into
   their module (ADR-0009 §13).
+- `ImpactResult.limitations` (SPEC §6.4): every reason an impact result is not complete is listed;
+  it is empty exactly when `completeness=complete`. `ImpactResult` also now requires sorted
+  `unresolved`/`limitations` and an explanation for every affected node and related test
+  (ADR-0010).
 
 ### Fixed
 - Analyzer: these calls are now recorded as `unknown` unresolved references instead of being

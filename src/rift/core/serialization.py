@@ -317,6 +317,7 @@ def _encode_impact(m: ImpactResult) -> JsonDict:
         "unresolved": [_encode_unresolved(u) for u in m.unresolved],
         "classification": m.classification.value,
         "completeness": m.completeness.value,
+        "limitations": [_encode_limitation(lim) for lim in m.limitations],
         "explanations": [_encode_explanation(e) for e in m.explanations],
     }
 
@@ -675,6 +676,7 @@ def _decode_impact(r: _Reader) -> ImpactResult:
         unresolved=r.models("unresolved", UnresolvedReference),
         classification=r.enum("classification", ImpactClass),
         completeness=r.enum("completeness", Completeness),
+        limitations=r.models("limitations", Limitation),
         explanations=r.models("explanations", ImpactExplanation),
     )
 
